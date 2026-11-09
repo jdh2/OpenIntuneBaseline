@@ -1,0 +1,138 @@
+{
+  "groupNameFormat": "{category} - Update Ring - {ring} - {audience}",
+  "rings": [ "Test", "1", "2", "3" ],
+
+  "audiences": [
+    {
+      "name": "Users",
+      "match": [ "* - U - *" ],
+      "dynamicSwitch": "DynamicUserRings",
+      "dynamicRules": {
+        "1": "(user.accountEnabled -eq true) and (user.userType -eq \"Member\") and ((user.objectId -startsWith \"0\") or (user.objectId -startsWith \"1\") or (user.objectId -startsWith \"2\") or (user.objectId -startsWith \"3\") or (user.objectId -startsWith \"4\"))",
+        "2": "(user.accountEnabled -eq true) and (user.userType -eq \"Member\") and ((user.objectId -startsWith \"5\") or (user.objectId -startsWith \"6\") or (user.objectId -startsWith \"7\") or (user.objectId -startsWith \"8\") or (user.objectId -startsWith \"9\"))",
+        "3": "(user.accountEnabled -eq true) and (user.userType -eq \"Member\") and ((user.objectId -startsWith \"a\") or (user.objectId -startsWith \"b\") or (user.objectId -startsWith \"c\") or (user.objectId -startsWith \"d\") or (user.objectId -startsWith \"e\") or (user.objectId -startsWith \"f\"))"
+      }
+    },
+    {
+      "name": "Devices",
+      "match": [ "*" ],
+      "dynamicSwitch": "DynamicDeviceRings",
+      "dynamicRules": {
+        "1": "(device.deviceOSType -eq \"Windows\") and (device.managementType -eq \"MDM\") and ((device.deviceId -startsWith \"0\") or (device.deviceId -startsWith \"1\") or (device.deviceId -startsWith \"2\") or (device.deviceId -startsWith \"3\") or (device.deviceId -startsWith \"4\"))",
+        "2": "(device.deviceOSType -eq \"Windows\") and (device.managementType -eq \"MDM\") and ((device.deviceId -startsWith \"5\") or (device.deviceId -startsWith \"6\") or (device.deviceId -startsWith \"7\") or (device.deviceId -startsWith \"8\") or (device.deviceId -startsWith \"9\"))",
+        "3": "(device.deviceOSType -eq \"Windows\") and (device.managementType -eq \"MDM\") and ((device.deviceId -startsWith \"a\") or (device.deviceId -startsWith \"b\") or (device.deviceId -startsWith \"c\") or (device.deviceId -startsWith \"d\") or (device.deviceId -startsWith \"e\") or (device.deviceId -startsWith \"f\"))"
+      }
+    }
+  ],
+
+  "platforms": {
+    "Windows": "WINDOWS\\IntuneManagement",
+    "Windows365": "WINDOWS365\\IntuneManagement"
+  },
+
+  "categories": [
+    { "name": "Windows 365",         "match": [ "Win365 - OIB - *" ] },
+    { "name": "Device Compliance",   "match": [ "Win - OIB - CP - *", "Win - OIB - Compliance - *" ] },
+    { "name": "Microsoft Office",    "match": [ "* - Microsoft Office - *" ] },
+    { "name": "Microsoft Edge",      "match": [ "* - Microsoft Edge - *" ] },
+    { "name": "Microsoft OneDrive",  "match": [ "* - Microsoft OneDrive - *" ] },
+    { "name": "Microsoft Defender",  "match": [ "* - Attack Surface Reduction - *", "* - Defender Antivirus - *", "* - Defender Antivirus Updates - *" ] },
+    { "name": "Encryption",          "match": [ "* - Encryption - *" ] },
+    { "name": "Identity and Access", "match": [ "* - Windows Hello for Business - *", "* - Credential Management - *", "* - Windows LAPS - *", "* - Local Group Membership - *", "* - Microsoft Accounts - *" ] },
+    { "name": "Windows Security",    "match": [ "* - Device Security - *", "* - Network Security - *", "* - Windows Firewall - *", "* - Internet Explorer (Legacy) - *", "Win - OIB - WUfB - *", "Win - OIB - WUfB Drivers - *", "* - Windows Update for Business - *" ] },
+    { "name": "Windows Experience",  "match": [ "* - Windows User Experience - *", "* - Windows Apps - *", "* - Microsoft Store - *", "* - Health Monitoring - *" ] }
+  ],
+
+  "ringSpecificPolicies": [
+    { "match": "* - Ring 1 - Pilot - *",      "rings": [ ] },
+    { "match": "* - Ring 2 - UAT - *",        "rings": [ ] },
+    { "match": "* - Ring 3 - Production - *", "rings": [ "Test", "1", "2", "3" ] }
+  ],
+
+  "filters": [
+    {
+      "key": "CloudPC",
+      "displayName": "OIB - Windows - Windows 365 Cloud PCs",
+      "description": "Windows 365 Cloud PCs. Used to target the Windows 365 baseline.",
+      "rule": "(device.model -startsWith \"Cloud PC\")"
+    },
+    {
+      "key": "Virtual",
+      "displayName": "OIB - Windows - Virtual Machines",
+      "description": "Windows 365, Azure Virtual Desktop and other virtual machines. Used to keep hardware-dependent policies off virtual devices.",
+      "rule": "(device.model -startsWith \"Cloud PC\") or (device.model -contains \"Virtual\") or (device.model -startsWith \"VMware\") or (device.operatingSystemSKU -eq \"ServerRdsh\")"
+    }
+  ],
+
+  "filterAssignments": [
+    { "match": "Win365 - OIB - *",                                "filter": "CloudPC", "mode": "include", "reason": "Windows 365 baseline, Cloud PCs only" },
+    { "match": "* - Encryption - D - BitLocker (OS Disk) - *",    "filter": "Virtual", "mode": "exclude", "reason": "BitLocker is not supported on Cloud PCs or AVD" },
+    { "match": "Win - OIB - CP - Device Health - *",              "filter": "Virtual", "mode": "exclude", "reason": "Cloud PCs use the Windows 365 Device Health compliance policy" }
+  ],
+
+  "conflicts": [
+    [ "* - ASR Rules (Audit Mode) - *", "* - ASR Rules (L2) - *" ]
+  ],
+
+  "hybrid": {
+    "nameSuffix": " - Hybrid",
+    "removeSettings": [
+      {
+        "policy": "* - Network Security - D - Disable NTLM - *",
+        "reason": "Blocking NTLM breaks shares, printers and apps reached by IP address or without a Kerberos SPN, and NTLMv1-only devices.",
+        "settings": [
+          "device_vendor_msft_policy_config_localpoliciessecurityoptions_networksecurity_restrictntlm_incomingntlmtraffic",
+          "device_vendor_msft_policy_config_localpoliciessecurityoptions_networksecurity_restrictntlm_outgoingntlmtraffictoremoteservers",
+          "device_vendor_msft_policy_config_localpoliciessecurityoptions_networksecurity_lanmanagerauthenticationlevel"
+        ]
+      },
+      {
+        "policy": "* - Device Security - D - Security Hardening - *",
+        "reason": "A minimum SMB version of 3.1.1 blocks file servers and domain controllers on Windows Server 2012 R2 or older, including SYSVOL and NETLOGON.",
+        "settings": [
+          "device_vendor_msft_policy_config_lanmanworkstation_minsmb2dialect",
+          "device_vendor_msft_policy_config_lanmanserver_minsmb2dialect"
+        ]
+      },
+      {
+        "policy": "* - Device Security - D - Local Security Policies - *",
+        "reason": "NTLMv2-only, required SMB signing and restricted remote SAM calls break older SMB servers, NTLMv1 devices and remote inventory tools.",
+        "settings": [
+          "device_vendor_msft_policy_config_localpoliciessecurityoptions_networksecurity_lanmanagerauthenticationlevel",
+          "device_vendor_msft_policy_config_localpoliciessecurityoptions_microsoftnetworkclient_digitallysigncommunicationsalways",
+          "device_vendor_msft_policy_config_localpoliciessecurityoptions_microsoftnetworkserver_digitallysigncommunicationsalways",
+          "device_vendor_msft_policy_config_localpoliciessecurityoptions_networkaccess_restrictclientsallowedtomakeremotecallstosam"
+        ]
+      },
+      {
+        "policy": "* - Local Group Membership - D - Local Administrators - *",
+        "reason": "Replaces the local Administrators group, removing Domain Admins and groups added by Group Policy.",
+        "settings": [
+          "device_vendor_msft_policy_config_localusersandgroups_configure"
+        ]
+      },
+      {
+        "policy": "* - Device Security - D - User Rights - *",
+        "reason": "Limits network access to Administrators and blocks local accounts from network and RDP logon, cutting off domain users and remote admin tools.",
+        "settings": [
+          "device_vendor_msft_policy_config_userrights_accessfromnetwork",
+          "device_vendor_msft_policy_config_userrights_denyaccessfromnetwork",
+          "device_vendor_msft_policy_config_userrights_denyremotedesktopserviceslogon"
+        ]
+      },
+      {
+        "policy": "* - Device Security - U - Device Guard, Credential Guard and HVCI - *",
+        "reason": "Credential Guard and LSA protection with UEFI lock break PEAP-MSCHAPv2 Wi-Fi and VPN, NTLMv1, unconstrained delegation and third-party LSA plugins, and are hard to undo.",
+        "settings": [
+          "device_vendor_msft_policy_config_deviceguard_lsacfgflags",
+          "device_vendor_msft_policy_config_localsecurityauthority_configurelsaprotectedprocess"
+        ]
+      }
+    ]
+  },
+
+  "skipByDefault": [
+    { "match": "* - ASR Rules (L2) - *",                 "reason": "Sets the same rules as ASR Rules (Audit Mode). Deploy it after auditing, in place of the audit policy." },
+    { "match": "* - Personal Data Encryption - *",       "reason": "Conflicts with Automatic Restart Sign-On and needs Windows Enterprise." }
+  ]
+}
