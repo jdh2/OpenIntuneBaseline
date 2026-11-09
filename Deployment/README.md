@@ -38,7 +38,7 @@ Points to be aware of:
 | Object | Count | Notes |
 | --- | --- | --- |
 | Assignment filters | 2 | `OIB - Windows - Windows 365 Cloud PCs` and `OIB - Windows - Virtual Machines` |
-| Security groups | 4 per category | `<Category> - Update Ring - Test`, `- 1`, `- 2`, `- 3`. These are assigned (static) groups; you add the members |
+| Security groups | 64 by default: 4 per category and audience | `<Category> - Update Ring - <Test, 1, 2 or 3> - <Users or Devices>`. Only the audiences a category's policies target get groups (see [Ring membership](#ring-membership)) |
 | Policies | 78 by default | Settings catalog, endpoint security, compliance, update rings, driver updates, health monitoring |
 | Assignments | 1 per policy per ring | Only for the rings named with `-Ring` |
 
@@ -58,6 +58,65 @@ Each category gets its own four ring groups, so you can roll out Office changes 
 | Windows Experience | Windows User Experience, In-Box App Removal, Microsoft Store, Endpoint Analytics |
 | Device Compliance | All Windows compliance policies |
 | Windows 365 | The Windows 365 baseline |
+
+### Ring membership
+
+Each category has separate ring groups for users and devices, and each policy goes to one of them based on its scope:
+
+| Audience | Policies | Group name |
+| --- | --- | --- |
+| Users | User-scoped policies (`- U -`), which includes every compliance policy | `<Category> - Update Ring - <Ring> - Users` |
+| Devices | Everything else: device-scoped policies (`- D -`), update rings, driver updates and Defender update rings | `<Category> - Update Ring - <Ring> - Devices` |
+
+A category only gets the groups for the audiences it uses. Device Compliance, for example, only has Users groups and Windows Security only has Devices groups.
+
+By default every ring group is static: you choose which users and devices go in each ring. Two switches make rings 1 to 3 dynamic instead, so they fill themselves. The Test groups always stay static.
+
+| Switch | Groups | Ring 1 | Ring 2 | Ring 3 |
+| --- | --- | --- | --- | --- |
+| `-DynamicDeviceRings` | `- Devices` | Device ID starts `0`–`4` (about 31%) | `5`–`9` (about 31%) | `a`–`f` (about 38%) |
+| `-DynamicUserRings` | `- Users` | Object ID starts `0`–`4` (about 31%) | `5`–`9` (about 31%) | `a`–`f` (about 38%) |
+
+The device rules only include Windows devices managed by Intune (`deviceOSType` Windows, `managementType` MDM). The user rules only include enabled member accounts, so guests and disabled accounts are left out; service and shared accounts are included. Every eligible device or user lands in exactly one of rings 1 to 3. The full rules are under each audience's `dynamicRules` in [DeploymentConfig.json](DeploymentConfig.json).
+
+```powershell
+.\Deploy-OpenIntuneBaseline.ps1 -TenantId contoso.onmicrosoft.com -DynamicDeviceRings -DynamicUserRings
+```
+
+Points to be aware of:
+
+- **Dynamic groups need Microsoft Entra ID P1** (included in Microsoft 365 E3, E5 and Business Premium).
+- **Assigning a dynamic ring reaches everyone in it straight away.** Assigning ring 3 with both switches effectively finishes the rollout.
+- **Every category's group for a ring has the same members**, but categories still roll out independently, because a category only reaches a ring once you run the script with that ring and category.
+- **Test members are also in one of rings 1 to 3.** That's fine: they get each policy from whichever group is assigned first.
+- **New groups take time to fill.** Entra ID processes new dynamic rules in the background, which can take from minutes to several hours in large tenants.
+
+**Switching existing groups.** The script decides static or dynamic per run, from the switches. Groups that already exist are left as they are, and the script reports any that don't match. Add `-UpdateGroupRules` to bring them in line:
+
+- **Static to dynamic, or a changed rule:** the rule is applied. The script refuses to convert a static group that has members, because converting removes them.
+- **Dynamic to static:** running with `-UpdateGroupRules` but without the switch converts the groups back to static, keeping their current members as ordinary members.
+
+```powershell
+.\Deploy-OpenIntuneBaseline.ps1 -TenantId contoso.onmicrosoft.com -SkipAssignments -DynamicDeviceRings -UpdateGroupRules
+```
+
+  ```powershell
+  .\Deploy-OpenIntuneBaseline.ps1 -TenantId contoso.onmicrosoft.com -SkipAssignments -UpdateGroupRules
+  ```
+
+### Small tenants
+
+For a small client, say 10 users, separate update rings are usually more work than they're worth. Run the script with `-TestRingOnly`:
+
+```powershell
+.\Deploy-OpenIntuneBaseline.ps1 -TenantId contoso.onmicrosoft.com -TestRingOnly
+```
+
+It creates only the Test groups (16 by default: one per category and audience) and assigns every policy to them. Put the client's users and devices in those groups, and the whole baseline applies to them. You can try it out on one or two devices first by adding only those, then add the rest.
+
+- The baseline's own Production update policies (Windows Update, driver and Defender updates) are assigned to the Test groups. Pilot and UAT stay unassigned, as usual.
+- `-Ring` can only be `Test`, and `-DynamicDeviceRings` and `-DynamicUserRings` have no effect, because the Test groups are always static.
+- If the tenant later grows, run the script without `-TestRingOnly` to add the ring 1 to 3 groups. The existing Test groups and assignments are kept.
 
 ### Ring-specific policies
 
@@ -113,7 +172,7 @@ Include either one with `-PolicyName`. The script refuses to deploy both halves 
 .\Deploy-OpenIntuneBaseline.ps1 -TenantId contoso.onmicrosoft.com
 ```
 
-**3. Add members.** Put your test users or devices in the `... - Update Ring - Test` groups. Nothing applies until a group has members.
+**3. Add members.** Put your test devices in the `... - Update Ring - Test - Devices` groups and your test users in the `... - Update Ring - Test - Users` groups. Nothing applies until a group has members. Fill the ring 1 to 3 groups the same way as you widen the rollout, or let them fill themselves with `-DynamicDeviceRings` and `-DynamicUserRings`.
 
 **4. Widen the rollout.** Once a ring is stable, run the script again with more rings. It adds only the missing assignments and leaves existing ones alone:
 
@@ -135,17 +194,23 @@ You can widen one category at a time:
 | `-PolicyName '*BitLocker*'` | Deploy only matching policies (wildcards). Also includes policies skipped by default |
 | `-Environment Hybrid` | Remove the settings that break on-premises AD (see above). Default is `CloudNative` |
 | `-SkipAssignments` | Create everything but assign nothing |
+| `-TestRingOnly` | For small tenants: create only the Test groups and assign every policy to them (see [Small tenants](#small-tenants)) |
+| `-DynamicDeviceRings` | Create the ring 1 to 3 Devices groups as dynamic groups (see [Ring membership](#ring-membership)) |
+| `-DynamicUserRings` | Create the ring 1 to 3 Users groups as dynamic groups |
+| `-UpdateGroupRules` | Bring existing ring groups in line with this run's static or dynamic choice: convert between static and dynamic, and update rules that differ |
 | `-ExportMapping .\Deployment\MAPPING.md` | Regenerate the mapping document from the configuration, without connecting to Graph. Run it after changing the configuration or pulling a new baseline version |
 | `-Force` | Skip the confirmation prompt |
 | `-Verbose` | Show the JSON sent for each object |
 
 ## Safe to run again
 
-- Filters, groups and policies are matched by display name. Existing ones are reused and never changed.
+- Filters, groups and policies are matched by display name. Existing ones are reused and never changed, except ring groups when you pass `-UpdateGroupRules`.
 - A policy's settings are never updated. When the baseline publishes a new version, its name changes (for example `v4.0` to `v4.1`), so the new version is created alongside the old one. Move your rings across, then delete the old policy.
 - Assignments are only ever added. Intune's assign call replaces all of a policy's assignments, so the script reads the current ones and sends them back with the new rings. Assignments you added by hand, including exclusions, are kept.
 - If the name of an existing group, filter or policy matches more than one object, that item fails rather than the script guessing.
 
-## Users or devices in the ring groups?
+## Why separate user and device groups?
 
-The groups accept either. Device-scoped policies (`- D -` in the name) apply most reliably to device groups, because they don't wait for a user to sign in. User-scoped policies (`- U -`) and compliance policies are designed for user groups. Microsoft recommends device groups for update rings in particular. Filters work with both.
+Device-scoped policies (`- D -` in the name) apply most reliably to device groups, because they don't wait for a user to sign in, and Microsoft recommends device groups for update rings in particular. User-scoped policies (`- U -`) and compliance policies are designed for user groups. Keeping the two apart means each policy reaches people or machines through one path only, so a ring means the same thing for every policy in it. Filters work with both.
+
+Put only devices in the `- Devices` groups and only users in the `- Users` groups. A user added to a device group isn't targeted by its policies, and a device added to a user group isn't either.

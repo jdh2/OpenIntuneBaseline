@@ -10,7 +10,12 @@
     Works in dependency order, driven by Deployment\DeploymentConfig.json:
 
       1. Filters      - assignment filters for Cloud PCs and virtual machines
-      2. Groups       - "<Category> - Update Ring - <Ring>" security groups, four per category
+      2. Groups       - "<Category> - Update Ring - <Ring> - <Audience>" security groups, four
+                        per category for each audience (Users, Devices) its policies target.
+                        User-scoped (- U -) policies go to the Users groups, everything else to
+                        the Devices groups. Groups are static by default; -DynamicDeviceRings
+                        and -DynamicUserRings make rings 1 to 3 dynamic using the rules in the
+                        configuration
       3. Policies     - imported from the IntuneManagement exports in the baseline folders
       4. Assignments  - each policy is assigned to its category's ring groups, with a filter
                         where the configuration asks for one
@@ -20,8 +25,9 @@
     are added to whatever a policy already has; nothing is ever removed.
 
     Groups, filters and policies that already exist (matched by display name) are reused,
-    never changed. Apart from adding assignments, the script only creates objects, so it is
-    safe to run again.
+    never changed, unless -UpdateGroupRules is used to switch existing ring groups between
+    static and dynamic. Apart from that and adding assignments, the script only creates
+    objects, so it is safe to run again.
 
     The baseline's own three-ring sets (Windows Update, Defender Antivirus updates, driver
     updates) are handled by ringSpecificPolicies: the Production policies go to every ring
@@ -43,6 +49,30 @@
 
 .PARAMETER SkipAssignments
     Creates filters, groups and policies, but assigns nothing.
+
+.PARAMETER TestRingOnly
+    For small tenants where update rings are overkill. Creates only the Test ring groups for
+    each category and audience, and assigns every policy to them. The baseline's Production
+    update policies go to the Test groups, and Pilot and UAT stay unassigned as usual.
+    Existing ring 1 to 3 groups are not touched.
+
+.PARAMETER DynamicDeviceRings
+    Creates the Devices ring groups for rings 1 to 3 as dynamic groups, using the Devices
+    audience's dynamicRules in the configuration (Windows MDM devices, split by the first
+    character of the device ID). Without it, all groups are static. Needs Entra ID P1.
+
+.PARAMETER DynamicUserRings
+    Creates the Users ring groups for rings 1 to 3 as dynamic groups, using the Users
+    audience's dynamicRules in the configuration (enabled member users, split by the first
+    character of the object ID). Without it, all groups are static. Needs Entra ID P1.
+
+.PARAMETER UpdateGroupRules
+    Brings ring groups that already exist in line with this run's choice of static or dynamic:
+    converts dynamic groups to static (keeping their current members), converts static groups
+    to dynamic, and updates rules that differ. A static group that has members is not
+    converted to dynamic, because converting it would remove them. Without this switch,
+    existing groups are left as they are and any difference is reported. Running it without
+    -DynamicDeviceRings or -DynamicUserRings converts those dynamic groups back to static.
 
 .PARAMETER Environment
     CloudNative (the default) deploys the baseline as published. Hybrid is for hybrid-joined
@@ -84,6 +114,22 @@
     Widens the Microsoft Office policies to ring 1.
 
 .EXAMPLE
+    .\Deploy-OpenIntuneBaseline.ps1 -TenantId contoso.onmicrosoft.com -TestRingOnly
+
+    For a small tenant: creates only the Test groups and assigns every policy to them.
+
+.EXAMPLE
+    .\Deploy-OpenIntuneBaseline.ps1 -TenantId contoso.onmicrosoft.com -DynamicDeviceRings -DynamicUserRings
+
+    Deploys with dynamic ring 1 to 3 groups for both devices and users; Test stays static.
+
+.EXAMPLE
+    .\Deploy-OpenIntuneBaseline.ps1 -TenantId contoso.onmicrosoft.com -SkipAssignments -DynamicDeviceRings -UpdateGroupRules
+
+    Converts existing static Devices ring groups to dynamic, without touching assignments.
+    Run it without -DynamicDeviceRings to convert them back to static.
+
+.EXAMPLE
     .\Deploy-OpenIntuneBaseline.ps1 -TenantId contoso.onmicrosoft.com -Environment Hybrid
 
     Deploys to the Test ring with the settings that break on-premises AD removed.
@@ -115,6 +161,14 @@ param(
 
     [switch]$SkipAssignments,
 
+    [switch]$TestRingOnly,
+
+    [switch]$DynamicDeviceRings,
+
+    [switch]$DynamicUserRings,
+
+    [switch]$UpdateGroupRules,
+
     [ValidateSet('CloudNative', 'Hybrid')]
     [string]$Environment = 'CloudNative',
 
@@ -131,6 +185,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# "pwsh -File script.ps1 -Ring Test,1" passes "Test,1" as one string, so split lists here.
+# -PolicyName is left alone because policy names can contain commas.
+$Ring = @($Ring | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+if ($Category) { $Category = @($Category | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
 
 $GraphV1 = 'https://graph.microsoft.com/v1.0'
 $GraphBeta = 'https://graph.microsoft.com/beta'
@@ -165,7 +224,7 @@ function Add-Result {
     $color = switch ($Status) {
         'Failed' { 'Red' }
         'Skipped' { 'Yellow' }
-        { $_ -in 'Created', 'Assigned' } { 'Green' }
+        { $_ -in 'Created', 'Assigned', 'Updated' } { 'Green' }
         default { 'Gray' }
     }
     $line = "  [$Status] $Name"
@@ -351,6 +410,34 @@ function ConvertTo-PolicyBody {
     $body
 }
 
+function Get-ConfiguredRule {
+    # The dynamic membership rule configured for an audience's ring, whether or not it is in use.
+    param([string]$AudienceName, [string]$RingName)
+    $audience = @($config.audiences | Where-Object { $_.name -eq $AudienceName })[0]
+    if (-not $audience -or -not $audience.dynamicRules) { return $null }
+    $property = $audience.dynamicRules.PSObject.Properties[$RingName]
+    if ($property -and $property.Value) { [string]$property.Value } else { $null }
+}
+
+function Get-RingRule {
+    # The rule to use for an audience's ring in this run: $null (static) unless the
+    # audience's dynamic switch, such as -DynamicDeviceRings, was passed.
+    param([string]$AudienceName, [string]$RingName)
+    if ($AudienceName -notin $script:DynamicAudiences) { return $null }
+    Get-ConfiguredRule $AudienceName $RingName
+}
+
+function Get-GroupName {
+    param([string]$CategoryName, [string]$RingName, [string]$AudienceName)
+    $config.groupNameFormat.Replace('{category}', $CategoryName).Replace('{ring}', $RingName).Replace('{audience}', $AudienceName)
+}
+
+function Format-Rule {
+    # Normalises a membership rule for comparison; Entra may change spacing and case.
+    param([string]$Rule)
+    ($Rule -replace '\s', '').ToLowerInvariant()
+}
+
 function New-AssignmentTarget {
     param([string]$GroupId, [string]$FilterId, [string]$FilterMode)
     $target = [ordered]@{
@@ -370,12 +457,46 @@ function New-AssignmentTarget {
 
 if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "The configuration file '$ConfigPath' was not found." }
 $config = Read-JsonFile $ConfigPath
-$configRings = Get-StringList $config.rings
+$allConfigRings = Get-StringList $config.rings
+# -TestRingOnly narrows every ring list to the first configured ring (Test), so no other
+# ring groups are created and every policy is assigned to the Test groups.
+$configRings = @(if ($TestRingOnly) { $allConfigRings[0] } else { $allConfigRings })
 
 $problems = [System.Collections.Generic.List[string]]::new()
 
 foreach ($name in $Ring) {
-    if ($name -notin $configRings) { $problems.Add("Ring '$name' is not one of the configured rings: $($configRings -join ', ')") }
+    if ($name -notin $allConfigRings) { $problems.Add("Ring '$name' is not one of the configured rings: $($allConfigRings -join ', ')") }
+    elseif ($name -notin $configRings) { $problems.Add("Ring '$name' can't be used with -TestRingOnly, which only has the $($configRings[0]) ring.") }
+}
+foreach ($rule in @($config.ringSpecificPolicies)) {
+    foreach ($name in (Get-StringList $rule.rings)) {
+        if ($name -notin $allConfigRings) { $problems.Add("ringSpecificPolicies '$($rule.match)' uses ring '$name', which is not a configured ring") }
+    }
+}
+if ($TestRingOnly -and ($DynamicDeviceRings -or $DynamicUserRings)) {
+    Write-Warning "-DynamicDeviceRings and -DynamicUserRings have no effect with -TestRingOnly: the $($configRings[0]) groups are always static."
+}
+$audienceNames = @($config.audiences | ForEach-Object { $_.name })
+if (-not $audienceNames) { $problems.Add('The configuration has no audiences.') }
+if ($audienceNames.Count -gt 1 -and $config.groupNameFormat -notlike '*{audience}*') { $problems.Add('groupNameFormat must contain {audience} when there is more than one audience.') }
+$dynamicSwitches = @{ DynamicUserRings = [bool]$DynamicUserRings; DynamicDeviceRings = [bool]$DynamicDeviceRings }
+$script:DynamicAudiences = @()
+foreach ($audience in @($config.audiences)) {
+    foreach ($property in @($audience.dynamicRules.PSObject.Properties)) {
+        if ($property.Name -notin $allConfigRings) { $problems.Add("Audience '$($audience.name)' has a dynamic rule for ring '$($property.Name)', which is not one of the configured rings: $($allConfigRings -join ', ')") }
+        elseif ($property.Value -and $property.Value -match '[“”‘’]') { $problems.Add("The $($audience.name) dynamic rule for ring '$($property.Name)' contains curly quotes; use straight quotes (`").") }
+    }
+    if ($audience.dynamicSwitch) {
+        if (-not $dynamicSwitches.ContainsKey($audience.dynamicSwitch)) { $problems.Add("Audience '$($audience.name)' has dynamicSwitch '$($audience.dynamicSwitch)'; it must be one of: $($dynamicSwitches.Keys -join ', ')") }
+        elseif ($dynamicSwitches[$audience.dynamicSwitch]) { $script:DynamicAudiences += $audience.name }
+    }
+}
+foreach ($switchName in @($dynamicSwitches.Keys | Where-Object { $dynamicSwitches[$_] })) {
+    $owners = @($config.audiences | Where-Object { $_.dynamicSwitch -eq $switchName })
+    if (-not $owners) { $problems.Add("-$switchName was passed, but no audience in the configuration uses it.") }
+    foreach ($owner in $owners) {
+        if (-not @($owner.dynamicRules.PSObject.Properties | Where-Object Value).Count) { $problems.Add("-$switchName was passed, but audience '$($owner.name)' has no dynamicRules.") }
+    }
 }
 $categoryNames = @($config.categories | ForEach-Object { $_.name })
 foreach ($name in (Get-StringList $Category)) {
@@ -435,6 +556,8 @@ foreach ($platformName in $Platform) {
         $ringRule = @($config.ringSpecificPolicies | Where-Object { $name -like $_.match } | Select-Object -First 1)
         $filterRule = @($config.filterAssignments | Where-Object { $name -like $_.match } | Select-Object -First 1)
         $skipRule = @($config.skipByDefault | Where-Object { $name -like $_.match } | Select-Object -First 1)
+        $audienceMatch = @($config.audiences | Where-Object { Test-NameMatch $name (Get-StringList $_.match) } | Select-Object -First 1)
+        if (-not $audienceMatch) { $problems.Add("$($name): matches no audience in the configuration") }
 
         $allPolicies.Add([pscustomobject]@{
                 Name          = $name
@@ -447,7 +570,8 @@ foreach ($platformName in $Platform) {
                 Json       = $json
                 Endpoint   = $endpoint
                 Category   = if ($categoryMatch) { $categoryMatch[0].name } else { $null }
-                Rings      = if ($ringRule) { Get-StringList $ringRule[0].rings } else { $configRings }
+                Audience   = if ($audienceMatch) { $audienceMatch[0].name } else { $null }
+                Rings      = if ($ringRule) { @((Get-StringList $ringRule[0].rings) | Where-Object { $_ -in $configRings }) } else { $configRings }
                 Filter     = if ($filterRule) { $filterRule[0] } else { $null }
                 SkipReason = if ($skipRule) { $skipRule[0].reason } else { $null }
             })
@@ -456,9 +580,6 @@ foreach ($platformName in $Platform) {
 
 if ($ExportMapping) {
     # Writes the full group and assignment plan as Markdown and stops; nothing is sent to Graph.
-    function Get-GroupName([string]$CategoryName, [string]$RingName) {
-        $config.groupNameFormat.Replace('{category}', $CategoryName).Replace('{ring}', $RingName)
-    }
     function Get-PolicyTypeLabel($Policy) {
         switch ($Policy.Endpoint) {
             'configurationPolicies' {
@@ -483,6 +604,7 @@ if ($ExportMapping) {
     $orderedCategories = @($config.categories | ForEach-Object { $_.name } | Where-Object { $_ -in @($allPolicies | ForEach-Object { $_.Category }) })
     $regenerate = ".\Deploy-OpenIntuneBaseline.ps1 -ExportMapping .\Deployment\$(Split-Path $ExportMapping -Leaf)"
     if ($Environment -ne 'CloudNative') { $regenerate += " -Environment $Environment" }
+    if ($TestRingOnly) { $regenerate += ' -TestRingOnly' }
 
     $lines.Add("# Update ring group and assignment mapping ($Environment)")
     $lines.Add('')
@@ -492,19 +614,48 @@ if ($ExportMapping) {
     $lines.Add($regenerate)
     $lines.Add('```')
     $lines.Add('')
-    $lines.Add("A default run deploys **$($deployed.Count) policies** into **$($orderedCategories.Count) categories**, creating **$($orderedCategories.Count * $configRings.Count) groups** and **$(@($config.filters).Count) filters**. Policies are only assigned to the rings named with ``-Ring`` in each run, so this is the full plan once every ring is rolled out.")
+    # A group set is one category and audience pair that has at least one deployed policy.
+    $groupSets = @(foreach ($categoryName in $orderedCategories) {
+            foreach ($audienceName in $audienceNames) {
+                $count = @($deployed | Where-Object { $_.Category -eq $categoryName -and $_.Audience -eq $audienceName }).Count
+                if ($count) { [pscustomobject]@{ Category = $categoryName; Audience = $audienceName; Count = $count } }
+            }
+        })
+
+    $lines.Add("A default run deploys **$($deployed.Count) policies** into **$($orderedCategories.Count) categories**, creating **$($groupSets.Count * $configRings.Count) groups** and **$(@($config.filters).Count) filters**. Policies are only assigned to the rings named with ``-Ring`` in each run, so this is the full plan once every ring is rolled out.")
     $lines.Add('')
 
     $lines.Add('## Groups')
     $lines.Add('')
-    $header = '| Category | Policies | ' + (($configRings | ForEach-Object { "Ring $_ group" }) -join ' | ') + ' |'
+    $lines.Add('Each category gets a set of ring groups for each audience its policies target. Groups are only created for audiences a category actually uses.')
+    $lines.Add('')
+    $header = '| Category | Audience | Policies | ' + (($configRings | ForEach-Object { "Ring $_ group" }) -join ' | ') + ' |'
     $lines.Add($header)
-    $lines.Add('| --- | --- | ' + (($configRings | ForEach-Object { '---' }) -join ' | ') + ' |')
-    foreach ($categoryName in $orderedCategories) {
-        $count = @($deployed | Where-Object { $_.Category -eq $categoryName }).Count
-        $cells = $configRings | ForEach-Object { '`' + (Get-GroupName $categoryName $_) + '`' }
-        $lines.Add("| [$categoryName](#$(($categoryName.ToLower() -replace '[^a-z0-9 -]', '') -replace ' ', '-')) | $count | $($cells -join ' | ') |")
+    $lines.Add('| --- | --- | --- | ' + (($configRings | ForEach-Object { '---' }) -join ' | ') + ' |')
+    foreach ($set in $groupSets) {
+        $cells = $configRings | ForEach-Object { '`' + (Get-GroupName $set.Category $_ $set.Audience) + '`' }
+        $lines.Add("| [$($set.Category)](#$(($set.Category.ToLower() -replace '[^a-z0-9 -]', '') -replace ' ', '-')) | $($set.Audience) | $($set.Count) | $($cells -join ' | ') |")
     }
+    $lines.Add('')
+
+    $lines.Add('### Ring membership')
+    $lines.Add('')
+    $lines.Add('Every category uses the same membership for a given ring and audience, so a device or user sits in the same ring for all categories. The categories still roll out independently, because each category is only assigned to the rings you name with `-Ring`.')
+    $lines.Add('')
+    $lines.Add('All groups are static by default. With the switch shown, rings that have a rule are created as dynamic groups instead.')
+    $lines.Add('')
+    $lines.Add('| Audience | Policies | Ring | Default | Dynamic rule (with the switch) |')
+    $lines.Add('| --- | --- | --- | --- | --- |')
+    foreach ($audience in @($config.audiences)) {
+        $patterns = (Get-StringList $audience.match | ForEach-Object { '`' + $_ + '`' }) -join ', '
+        foreach ($ringName in $configRings) {
+            $rule = Get-ConfiguredRule $audience.name $ringName
+            $dynamicText = if ($rule -and $audience.dynamicSwitch) { "``-$($audience.dynamicSwitch)``: ``$(Format-Cell $rule)``" } else { 'Always static' }
+            $lines.Add("| $($audience.name) | $patterns | $ringName | Static | $dynamicText |")
+        }
+    }
+    $lines.Add('')
+    $lines.Add('An audience takes every policy matching its patterns that an earlier audience did not take.')
     $lines.Add('')
 
     $lines.Add('## Filters')
@@ -541,17 +692,19 @@ if ($ExportMapping) {
     foreach ($categoryName in $orderedCategories) {
         $lines.Add("### $categoryName")
         $lines.Add('')
-        $lines.Add("Groups: $(($configRings | ForEach-Object { '`' + (Get-GroupName $categoryName $_) + '`' }) -join ', ')")
-        $lines.Add('')
-        $lines.Add('| Policy | Type | Scope | Rings | Filter |')
-        $lines.Add('| --- | --- | --- | --- | --- |')
+        foreach ($set in @($groupSets | Where-Object Category -eq $categoryName)) {
+            $lines.Add("$($set.Audience) groups: $(($configRings | ForEach-Object { '`' + (Get-GroupName $categoryName $_ $set.Audience) + '`' }) -join ', ')")
+            $lines.Add('')
+        }
+        $lines.Add('| Policy | Type | Scope | Assigned to | Rings | Filter |')
+        $lines.Add('| --- | --- | --- | --- | --- | --- |')
         foreach ($policy in @($allPolicies | Where-Object { $_.Category -eq $categoryName } | Sort-Object Name)) {
             $name = Format-Cell $policy.Name
             if ($policy.HybridEmpty) { $name = "~~$name~~ *(not deployed in hybrid: all settings removed)*" }
             elseif ($policy.SkipReason) { $name = "~~$name~~ *(skipped by default)*" }
             $rings = if (@($policy.Rings).Count) { $policy.Rings -join ', ' } else { '*Not assigned*' }
             $filterText = if ($policy.Filter) { "$($policy.Filter.mode) ``$($filtersByKey[$policy.Filter.filter].displayName)``" } else { '' }
-            $lines.Add("| $name | $(Get-PolicyTypeLabel $policy) | $(Get-PolicyScope $policy.Name) | $rings | $filterText |")
+            $lines.Add("| $name | $(Get-PolicyTypeLabel $policy) | $(Get-PolicyScope $policy.Name) | $($policy.Audience) | $rings | $filterText |")
         }
         $lines.Add('')
     }
@@ -602,9 +755,6 @@ if (-not $policies) { throw 'No policies match the selection.' }
 
 foreach ($policy in $policies) {
     if (-not $policy.Category) { $problems.Add("$($policy.Name): matches no category in the configuration") }
-    foreach ($name in $policy.Rings) {
-        if ($name -notin $configRings) { $problems.Add("$($policy.Name): ring-specific ring '$name' is not a configured ring") }
-    }
     if ($policy.Filter -and -not $PolicyTypes[$policy.Endpoint].SupportsFilters) {
         $problems.Add("$($policy.Name): has a filter rule, but $($policy.Endpoint) does not support assignment filters")
     }
@@ -646,7 +796,10 @@ if ($problems.Count) { throw "The configuration has problems, nothing was change
 
 $neededCategories = @($policies | ForEach-Object { $_.Category } | Sort-Object -Unique)
 $neededFilterKeys = @($policies | Where-Object Filter | ForEach-Object { $_.Filter.filter } | Sort-Object -Unique)
-$groupCount = $neededCategories.Count * $configRings.Count
+# One set of ring groups per category and audience that the selected policies use.
+$neededGroupSets = @($policies | ForEach-Object { [pscustomobject]@{ Category = $_.Category; Audience = $_.Audience } } |
+        Sort-Object Category, Audience -Unique)
+$groupCount = $neededGroupSets.Count * $configRings.Count
 
 Write-Host "Environment: $Environment"
 if ($Environment -eq 'Hybrid') {
@@ -656,6 +809,9 @@ if ($Environment -eq 'Hybrid') {
 Write-Host "Loaded $($policies.Count) policies in $($neededCategories.Count) categories, which need $groupCount groups and $($neededFilterKeys.Count) filters."
 if ($SkipAssignments) { Write-Host 'Assignments are skipped (-SkipAssignments).' }
 else { Write-Host "Rings to assign in this run: $($Ring -join ', ')" }
+if ($TestRingOnly) { Write-Host "Test ring only: creating just the $($configRings[0]) groups (static) and assigning every policy to them." }
+elseif ($script:DynamicAudiences) { Write-Host "Dynamic ring groups: $($script:DynamicAudiences -join ', ') (rings with a rule; the rest are static)" }
+else { Write-Host 'Ring groups: all static' }
 
 #endregion
 
@@ -749,35 +905,96 @@ foreach ($key in $neededFilterKeys) {
 
 Write-Host "`nGroups"
 $groupMap = @{}
-foreach ($categoryName in $neededCategories) {
+foreach ($set in $neededGroupSets) {
+    $categoryName = $set.Category
+    $audienceName = $set.Audience
     foreach ($ringName in $configRings) {
-        $name = $config.groupNameFormat.Replace('{category}', $categoryName).Replace('{ring}', $ringName)
-        $key = "$categoryName|$ringName"
+        $name = Get-GroupName $categoryName $ringName $audienceName
+        $key = "$categoryName|$ringName|$audienceName"
+        $rule = Get-RingRule $audienceName $ringName
+        $description = if ($rule) {
+            "OpenIntuneBaseline update ring $ringName for $categoryName policies targeting $($audienceName.ToLower()). Members are added automatically by the dynamic membership rule."
+        }
+        else {
+            "OpenIntuneBaseline update ring $ringName for $categoryName policies targeting $($audienceName.ToLower()). Add $($audienceName.ToLower()) to roll the policies out to them."
+        }
         try {
-            $existing = Get-GraphCollection "$GraphV1/groups?`$select=id,displayName,securityEnabled&`$filter=$(Get-EscapedFilter 'displayName' $name)"
+            $existing = Get-GraphCollection "$GraphV1/groups?`$select=id,displayName,securityEnabled,groupTypes,membershipRule&`$filter=$(Get-EscapedFilter 'displayName' $name)"
             if ($existing.Count -gt 1) { throw "$($existing.Count) groups in the tenant have this name, so the right one is unclear." }
             if ($existing.Count -eq 1) {
-                if (-not $existing[0].securityEnabled) { throw 'A group with this name exists but is not security enabled, so it cannot be assigned.' }
-                $groupMap[$key] = $existing[0].id
-                Add-Result 'Group' $name 'Exists' $existing[0].id
+                $group = $existing[0]
+                if (-not $group.securityEnabled) { throw 'A group with this name exists but is not security enabled, so it cannot be assigned.' }
+                $groupMap[$key] = $group.id
+                $isDynamic = 'DynamicMembership' -in @($group.groupTypes)
+
+                $difference = if ($rule -and -not $isDynamic) { 'is static but configured as dynamic' }
+                elseif ($rule -and (Format-Rule $group.membershipRule) -ne (Format-Rule $rule)) { 'has a different dynamic rule from the configuration' }
+                elseif (-not $rule -and $isDynamic) { 'is dynamic but configured as static' }
+
+                if (-not $difference) {
+                    Add-Result 'Group' $name 'Exists' $group.id
+                    continue
+                }
+                if (-not $UpdateGroupRules) {
+                    Add-Result 'Group' $name 'Exists' $group.id "The group $difference. Run with -UpdateGroupRules to apply the configuration."
+                    continue
+                }
+
+                if ($rule) {
+                    if (-not $isDynamic) {
+                        # Making a group dynamic removes its direct members, so refuse rather than drop them silently.
+                        $members = @((Invoke-Graph -Method GET -Uri "$GraphV1/groups/$($group.id)/members?`$select=id&`$top=1").value)
+                        if ($members.Count) { throw 'The group has members, which converting it to dynamic would remove. Empty it first, or leave it static.' }
+                    }
+                    $body = [ordered]@{
+                        description                   = $description
+                        groupTypes                    = @(@($group.groupTypes) + 'DynamicMembership' | Sort-Object -Unique)
+                        membershipRule                = $rule
+                        membershipRuleProcessingState = 'On'
+                    }
+                    $action = 'Apply the dynamic membership rule'
+                    $done = 'applied the configured rule'
+                }
+                else {
+                    # Making a group static keeps its current members as ordinary members.
+                    $body = [ordered]@{
+                        description = $description
+                        groupTypes  = @(@($group.groupTypes) | Where-Object { $_ -ne 'DynamicMembership' })
+                    }
+                    $action = 'Convert to a static group'
+                    $done = 'converted it to static; its current members were kept'
+                }
+                Write-Verbose "Group update body: $($body | ConvertTo-Json -Depth 10)"
+                if ($PSCmdlet.ShouldProcess($name, $action)) {
+                    $null = Invoke-Graph -Method PATCH -Uri "$GraphV1/groups/$($group.id)" -Body $body
+                    Add-Result 'Group' $name 'Updated' $group.id "The group $difference; $done."
+                }
+                else {
+                    Add-Result 'Group' $name 'WhatIf' $group.id "The group $difference; would have $done."
+                }
                 continue
             }
 
             $body = [ordered]@{
                 displayName     = $name
-                description     = "OpenIntuneBaseline update ring $ringName for $categoryName policies. Add users or devices to roll the policies out to them."
+                description     = $description
                 mailEnabled     = $false
                 mailNickname    = 'oib-' + [guid]::NewGuid().ToString('N').Substring(0, 10)
                 securityEnabled = $true
                 groupTypes      = @()
             }
+            if ($rule) {
+                $body.groupTypes = @('DynamicMembership')
+                $body.membershipRule = $rule
+                $body.membershipRuleProcessingState = 'On'
+            }
             Write-Verbose "Group body: $($body | ConvertTo-Json -Depth 10)"
 
-            if ($PSCmdlet.ShouldProcess($name, 'Create group')) {
+            if ($PSCmdlet.ShouldProcess($name, $(if ($rule) { 'Create dynamic group' } else { 'Create group' }))) {
                 $created = Invoke-Graph -Method POST -Uri "$GraphV1/groups" -Body $body
                 $groupMap[$key] = $created.id
                 $script:CreatedDirectoryObjects = $true
-                Add-Result 'Group' $name 'Created' $created.id
+                Add-Result 'Group' $name 'Created' $created.id $(if ($rule) { 'Dynamic' } else { 'Static' })
             }
             else {
                 $groupMap[$key] = [guid]::Empty.ToString()
@@ -875,7 +1092,7 @@ foreach ($policy in ($policies | Sort-Object Category, Name)) {
         $addedRings = [System.Collections.Generic.List[string]]::new()
         $notes = [System.Collections.Generic.List[string]]::new()
         foreach ($ringName in $assignRings) {
-            $groupId = $groupMap["$($policy.Category)|$ringName"]
+            $groupId = $groupMap["$($policy.Category)|$ringName|$($policy.Audience)"]
             if (-not $groupId) { $notes.Add("ring $ringName group was not created"); continue }
             if ($groupId -in $currentGroupIds) { continue }
             $newAssignments.Add((New-AssignmentTarget -GroupId $groupId -FilterId $filterId -FilterMode $filterMode))
@@ -937,7 +1154,13 @@ $script:Results | Group-Object Type, Status | Sort-Object Name | ForEach-Object 
 }
 
 if (-not $SkipAssignments -and -not $WhatIfPreference) {
-    Write-Host "`nAdd users or devices to the '<Category> - Update Ring - <Ring>' groups to roll the policies out to them."
+    Write-Host ''
+    foreach ($audienceName in @($neededGroupSets | ForEach-Object { $_.Audience } | Sort-Object -Unique)) {
+        $staticRings = @($Ring | Where-Object { -not (Get-RingRule $audienceName $_) })
+        $dynamicRings = @($Ring | Where-Object { Get-RingRule $audienceName $_ })
+        if ($staticRings) { Write-Host "Add $($audienceName.ToLower()) to the ring $($staticRings -join ', ') $audienceName groups to roll the policies out to them." }
+        if ($dynamicRings) { Write-Host "The ring $($dynamicRings -join ', ') $audienceName groups are dynamic and fill automatically. Entra ID can take a while to process new rules." }
+    }
 }
 if ($WhatIfPreference) {
     Write-Host "`nNo changes were made (-WhatIf)."
