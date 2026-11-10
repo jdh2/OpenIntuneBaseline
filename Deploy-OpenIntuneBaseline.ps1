@@ -81,6 +81,13 @@
     " - Hybrid" to the names of the policies it changed. Policies left with no settings
     are not deployed. The baseline files on disk are never changed.
 
+.PARAMETER Overlay
+    The overlay to apply on top of the upstream baseline: an organisation's own versions of
+    some policies, plus baseline policies to leave out, defined under overlays in the
+    configuration. Defaults to defaultOverlay in the configuration (Gnosis). Use None to
+    deploy the upstream baseline unchanged. The upstream folders are never modified, so they
+    can still be updated from upstream.
+
 .PARAMETER ExportMapping
     Writes a Markdown document to this path showing every group that would be created and
     which policies are assigned to which ring groups and filters, then stops. Does not
@@ -171,6 +178,9 @@ param(
 
     [ValidateSet('CloudNative', 'Hybrid')]
     [string]$Environment = 'CloudNative',
+
+    [ValidateNotNullOrEmpty()]
+    [string]$Overlay,
 
     [ValidateNotNullOrEmpty()]
     [string]$ExportMapping,
@@ -351,6 +361,12 @@ function Remove-ExportMetadata {
     $clean
 }
 
+function Get-OibId {
+    # The baseline's own policy ID, from the "OIBID:" tag in the description.
+    param($Json)
+    if ([string]$Json.description -match 'OIBID:([0-9A-Fa-f-]{36})') { $Matches[1].ToUpperInvariant() } else { '' }
+}
+
 function Get-PolicyEndpoint {
     param($Json)
     $type = $Json.'@odata.type'
@@ -510,6 +526,41 @@ foreach ($rule in @($config.filterAssignments)) {
 }
 if ($problems.Count) { throw "The configuration has problems, nothing was changed:`n  $($problems -join "`n  ")" }
 
+# Overlay: an organisation's own versions of some baseline policies, plus baseline policies
+# to leave out. The upstream baseline folders are never changed, so they can still be
+# updated from upstream; the overlay is applied on top when the policies are loaded.
+$overlayName = if ($PSBoundParameters.ContainsKey('Overlay')) { $Overlay } else { [string]$config.defaultOverlay }
+if ($overlayName -eq 'None') { $overlayName = '' }
+$overlayFiles = @{}
+$overlayExclude = @()
+$overlayExcluded = [System.Collections.Generic.List[string]]::new()
+if ($overlayName) {
+    $overlayProperty = $config.overlays.PSObject.Properties[$overlayName]
+    if (-not $overlayProperty) {
+        $defined = @($config.overlays.PSObject.Properties | ForEach-Object { $_.Name })
+        throw "Overlay '$overlayName' is not defined under overlays in the configuration (defined: $($defined -join ', ')). Use -Overlay None to deploy the upstream baseline only."
+    }
+    $overlayExclude = Get-StringList $overlayProperty.Value.exclude
+    foreach ($entry in @($overlayProperty.Value.platforms.PSObject.Properties)) {
+        if ($entry.Name -notin @($config.platforms.PSObject.Properties | ForEach-Object { $_.Name })) {
+            throw "Overlay '$overlayName' has files for platform '$($entry.Name)', which is not a configured platform."
+        }
+        if ($entry.Name -notin $Platform) { continue }
+        $overlayFolder = Join-Path $BaselinePath $entry.Value
+        if (-not (Test-Path -LiteralPath $overlayFolder)) { throw "The $overlayName overlay folder '$overlayFolder' was not found." }
+        $overlayFiles[$entry.Name] = @(foreach ($overlayFile in Get-ChildItem -LiteralPath $overlayFolder -Recurse -Filter *.json | Sort-Object Name) {
+                $overlayJson = Read-JsonFile $overlayFile.FullName
+                [pscustomobject]@{
+                    File   = $overlayFile
+                    Json   = $overlayJson
+                    Name   = $overlayJson.($PolicyTypes[(Get-PolicyEndpoint $overlayJson)].NameProperty)
+                    OibId  = Get-OibId $overlayJson
+                    Used   = $false
+                }
+            })
+    }
+}
+
 # Reads every policy export and works out its category, rings, filter and default selection.
 $allPolicies = [System.Collections.Generic.List[object]]::new()
 foreach ($platformName in $Platform) {
@@ -521,6 +572,27 @@ foreach ($platformName in $Platform) {
         $endpoint = Get-PolicyEndpoint $json
         $name = $json.($PolicyTypes[$endpoint].NameProperty)
         if (-not $name) { $problems.Add("$($file.Name): has no display name"); continue }
+
+        # Overlay: leave the policy out, or swap in the overlay's version of it.
+        $overlaySource = $null
+        $sourceFile = $file
+        if ($overlayExclude -and (Test-NameMatch $name $overlayExclude)) {
+            $overlayExcluded.Add($name)
+            continue
+        }
+        $oibId = Get-OibId $json
+        $replacement = @($overlayFiles[$platformName] | Where-Object { ($oibId -and $_.OibId -eq $oibId) -or $_.Name -eq $name } | Select-Object -First 1)
+        if ($replacement) {
+            $replacement[0].Used = $true
+            if ($replacement[0].Name -ne $name) {
+                $problems.Add("The $overlayName overlay's '$($replacement[0].Name)' replaces the baseline's '$name', which has a different name or version. Upstream has probably updated the policy; update the overlay file.")
+            }
+            $sourceFile = $replacement[0].File
+            $json = $replacement[0].Json
+            $endpoint = Get-PolicyEndpoint $json
+            $name = $replacement[0].Name
+            $overlaySource = $overlayName
+        }
         $originalName = $name
 
         # Hybrid: strips the settings that break on-premises AD from the in-memory copy.
@@ -562,11 +634,12 @@ foreach ($platformName in $Platform) {
         $allPolicies.Add([pscustomobject]@{
                 Name          = $name
                 OriginalName  = $originalName
+                Overlay       = $overlaySource
                 HybridRemoved = $hybridRemoved
                 HybridReasons = $hybridReasons
                 HybridEmpty   = $hybridEmpty
                 Platform   = $platformName
-                File       = $file.FullName
+                File       = $sourceFile.FullName
                 Json       = $json
                 Endpoint   = $endpoint
                 Category   = if ($categoryMatch) { $categoryMatch[0].name } else { $null }
@@ -575,6 +648,11 @@ foreach ($platformName in $Platform) {
                 Filter     = if ($filterRule) { $filterRule[0] } else { $null }
                 SkipReason = if ($skipRule) { $skipRule[0].reason } else { $null }
             })
+    }
+}
+foreach ($platformName in $overlayFiles.Keys) {
+    foreach ($unused in @($overlayFiles[$platformName] | Where-Object { -not $_.Used })) {
+        $problems.Add("The $overlayName overlay's '$($unused.Name)' doesn't match any $platformName baseline policy by OIB ID or name. Upstream may have renamed or removed it; update the overlay.")
     }
 }
 
@@ -605,6 +683,7 @@ if ($ExportMapping) {
     $regenerate = ".\Deploy-OpenIntuneBaseline.ps1 -ExportMapping .\Deployment\$(Split-Path $ExportMapping -Leaf)"
     if ($Environment -ne 'CloudNative') { $regenerate += " -Environment $Environment" }
     if ($TestRingOnly) { $regenerate += ' -TestRingOnly' }
+    if ($PSBoundParameters.ContainsKey('Overlay')) { $regenerate += " -Overlay $Overlay" }
 
     $lines.Add("# Update ring group and assignment mapping ($Environment)")
     $lines.Add('')
@@ -658,6 +737,23 @@ if ($ExportMapping) {
     $lines.Add('An audience takes every policy matching its patterns that an earlier audience did not take.')
     $lines.Add('')
 
+    if ($overlayName) {
+        $lines.Add("## $overlayName overlay")
+        $lines.Add('')
+        $lines.Add("These are the differences from the upstream baseline, defined under ``overlays.$overlayName`` in the configuration. The upstream files are not changed. Deploy the upstream baseline instead with ``-Overlay None``.")
+        $lines.Add('')
+        $lines.Add('| Change | Policy | Source |')
+        $lines.Add('| --- | --- | --- |')
+        foreach ($policy in @($allPolicies | Where-Object Overlay | Sort-Object Name)) {
+            $relative = [IO.Path]::GetRelativePath($BaselinePath, $policy.File).Replace('\', '/')
+            $lines.Add("| Replaced with the $overlayName version | $(Format-Cell $policy.Name) | ``$(Format-Cell $relative)`` |")
+        }
+        foreach ($excludedName in @($overlayExcluded | Sort-Object)) {
+            $lines.Add("| Left out | $(Format-Cell $excludedName) | ``exclude`` in the configuration |")
+        }
+        $lines.Add('')
+    }
+
     $lines.Add('## Filters')
     $lines.Add('')
     $lines.Add('| Filter | Rule | Applied to |')
@@ -702,6 +798,7 @@ if ($ExportMapping) {
             $name = Format-Cell $policy.Name
             if ($policy.HybridEmpty) { $name = "~~$name~~ *(not deployed in hybrid: all settings removed)*" }
             elseif ($policy.SkipReason) { $name = "~~$name~~ *(skipped by default)*" }
+            if ($policy.Overlay -and -not $policy.HybridEmpty) { $name += " *($($policy.Overlay))*" }
             $rings = if (@($policy.Rings).Count) { $policy.Rings -join ', ' } else { '*Not assigned*' }
             $filterText = if ($policy.Filter) { "$($policy.Filter.mode) ``$($filtersByKey[$policy.Filter.filter].displayName)``" } else { '' }
             $lines.Add("| $name | $(Get-PolicyTypeLabel $policy) | $(Get-PolicyScope $policy.Name) | $($policy.Audience) | $rings | $filterText |")
@@ -802,6 +899,11 @@ $neededGroupSets = @($policies | ForEach-Object { [pscustomobject]@{ Category = 
 $groupCount = $neededGroupSets.Count * $configRings.Count
 
 Write-Host "Environment: $Environment"
+if ($overlayName) {
+    $replacedCount = @($allPolicies | Where-Object Overlay).Count
+    Write-Host "Overlay: $overlayName - $replacedCount policies replaced with $overlayName versions, $($overlayExcluded.Count) left out. Use -Overlay None for the upstream baseline only."
+}
+else { Write-Host 'Overlay: none (upstream baseline only)' }
 if ($Environment -eq 'Hybrid') {
     $changed = @($policies | Where-Object { $_.HybridRemoved.Count })
     Write-Host "Removed $(@($changed | ForEach-Object { $_.HybridRemoved }).Count) settings from $($changed.Count) policies for on-premises AD compatibility."

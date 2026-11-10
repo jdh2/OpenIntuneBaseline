@@ -6,7 +6,7 @@ Generated from [`DeploymentConfig.json`](DeploymentConfig.json) and the Windows 
 .\Deploy-OpenIntuneBaseline.ps1 -ExportMapping .\Deployment\MAPPING-Hybrid.md -Environment Hybrid
 ```
 
-A default run deploys **76 policies** into **10 categories**, creating **64 groups** and **2 filters**. Policies are only assigned to the rings named with `-Ring` in each run, so this is the full plan once every ring is rolled out.
+A default run deploys **70 policies** into **10 categories**, creating **64 groups** and **2 filters**. Policies are only assigned to the rings named with `-Ring` in each run, so this is the full plan once every ring is rolled out.
 
 ## Groups
 
@@ -27,7 +27,7 @@ Each category gets a set of ring groups for each audience its policies target. G
 | [Encryption](#encryption) | Devices | 1 | `Encryption - Update Ring - Test - Devices` | `Encryption - Update Ring - 1 - Devices` | `Encryption - Update Ring - 2 - Devices` | `Encryption - Update Ring - 3 - Devices` |
 | [Identity and Access](#identity-and-access) | Devices | 5 | `Identity and Access - Update Ring - Test - Devices` | `Identity and Access - Update Ring - 1 - Devices` | `Identity and Access - Update Ring - 2 - Devices` | `Identity and Access - Update Ring - 3 - Devices` |
 | [Windows Security](#windows-security) | Users | 4 | `Windows Security - Update Ring - Test - Users` | `Windows Security - Update Ring - 1 - Users` | `Windows Security - Update Ring - 2 - Users` | `Windows Security - Update Ring - 3 - Users` |
-| [Windows Security](#windows-security) | Devices | 26 | `Windows Security - Update Ring - Test - Devices` | `Windows Security - Update Ring - 1 - Devices` | `Windows Security - Update Ring - 2 - Devices` | `Windows Security - Update Ring - 3 - Devices` |
+| [Windows Security](#windows-security) | Devices | 20 | `Windows Security - Update Ring - Test - Devices` | `Windows Security - Update Ring - 1 - Devices` | `Windows Security - Update Ring - 2 - Devices` | `Windows Security - Update Ring - 3 - Devices` |
 | [Windows Experience](#windows-experience) | Users | 2 | `Windows Experience - Update Ring - Test - Users` | `Windows Experience - Update Ring - 1 - Users` | `Windows Experience - Update Ring - 2 - Users` | `Windows Experience - Update Ring - 3 - Users` |
 | [Windows Experience](#windows-experience) | Devices | 6 | `Windows Experience - Update Ring - Test - Devices` | `Windows Experience - Update Ring - 1 - Devices` | `Windows Experience - Update Ring - 2 - Devices` | `Windows Experience - Update Ring - 3 - Devices` |
 
@@ -49,6 +49,21 @@ All groups are static by default. With the switch shown, rings that have a rule 
 | Devices | `*` | 3 | Static | `-DynamicDeviceRings`: `(device.deviceOSType -eq "Windows") and (device.managementType -eq "MDM") and ((device.deviceId -startsWith "a") or (device.deviceId -startsWith "b") or (device.deviceId -startsWith "c") or (device.deviceId -startsWith "d") or (device.deviceId -startsWith "e") or (device.deviceId -startsWith "f"))` |
 
 An audience takes every policy matching its patterns that an earlier audience did not take.
+
+## Gnosis overlay
+
+These are the differences from the upstream baseline, defined under `overlays.Gnosis` in the configuration. The upstream files are not changed. Deploy the upstream baseline instead with `-Overlay None`.
+
+| Change | Policy | Source |
+| --- | --- | --- |
+| Replaced with the Gnosis version | Win - OIB - ES - Local Group Membership - D - Local Administrators - v3.7 - Hybrid | `GNOSIS/Windows/SettingsCatalog/Win - OIB - ES - Local Group Membership - D - Local Administrators - v3.7.json` |
+| Replaced with the Gnosis version | Win - OIB - ES - Windows LAPS - D - LAPS Configuration - v4.0 | `GNOSIS/Windows/SettingsCatalog/Win - OIB - ES - Windows LAPS - D - LAPS Configuration - v4.0.json` |
+| Left out | Win - OIB - WUfB - Ring 1 - Pilot - v3.0 | `exclude` in the configuration |
+| Left out | Win - OIB - WUfB - Ring 2 - UAT - v3.0 | `exclude` in the configuration |
+| Left out | Win - OIB - WUfB - Ring 3 - Production - v3.0 | `exclude` in the configuration |
+| Left out | Win - OIB - WUfB Drivers - Ring 1 - Pilot - v3.0 | `exclude` in the configuration |
+| Left out | Win - OIB - WUfB Drivers - Ring 2 - UAT - v3.0 | `exclude` in the configuration |
+| Left out | Win - OIB - WUfB Drivers - Ring 3 - Production - v3.0 | `exclude` in the configuration |
 
 ## Filters
 
@@ -174,7 +189,7 @@ Devices groups: `Identity and Access - Update Ring - Test - Devices`, `Identity 
 | --- | --- | --- | --- | --- | --- |
 | ~~Win - OIB - ES - Local Group Membership - D - Local Administrators - v3.7 - Hybrid~~ *(not deployed in hybrid: all settings removed)* | Endpoint security | Device | Devices | Test, 1, 2, 3 |  |
 | Win - OIB - ES - Windows Hello for Business - D - WHfB Configuration - v3.2 | Endpoint security | Device | Devices | Test, 1, 2, 3 |  |
-| Win - OIB - ES - Windows LAPS - D - LAPS Configuration - v4.0 | Endpoint security | Device | Devices | Test, 1, 2, 3 |  |
+| Win - OIB - ES - Windows LAPS - D - LAPS Configuration - v4.0 *(Gnosis)* | Endpoint security | Device | Devices | Test, 1, 2, 3 |  |
 | Win - OIB - SC - Credential Management - D - Passwordless - v3.3 | Settings catalog | Device | Devices | Test, 1, 2, 3 |  |
 | Win - OIB - SC - Microsoft Accounts - D - Configuration - v3.2 | Settings catalog | Device | Devices | Test, 1, 2, 3 |  |
 | Win - OIB - SC - Windows Hello for Business - D - Cloud Kerberos Trust - v3.5 | Settings catalog | Device | Devices | Test, 1, 2, 3 |  |
@@ -212,12 +227,6 @@ Devices groups: `Windows Security - Update Ring - Test - Devices`, `Windows Secu
 | ~~Win - OIB - SC - Network Security - D - Disable NTLM - v3.8 - Hybrid~~ *(not deployed in hybrid: all settings removed)* | Settings catalog | Device | Devices | Test, 1, 2, 3 |  |
 | Win - OIB - SC - Windows Update for Business - D - Delivery Optimisation - v3.0 | Settings catalog | Device | Devices | Test, 1, 2, 3 |  |
 | Win - OIB - SC - Windows Update for Business - D - Reports and Telemetry - v3.0 | Settings catalog | Device | Devices | Test, 1, 2, 3 |  |
-| Win - OIB - WUfB - Ring 1 - Pilot - v3.0 | Update ring | Device | Devices | *Not assigned* |  |
-| Win - OIB - WUfB - Ring 2 - UAT - v3.0 | Update ring | Device | Devices | *Not assigned* |  |
-| Win - OIB - WUfB - Ring 3 - Production - v3.0 | Update ring | Device | Devices | Test, 1, 2, 3 |  |
-| Win - OIB - WUfB Drivers - Ring 1 - Pilot - v3.0 | Driver updates | Device | Devices | *Not assigned* |  |
-| Win - OIB - WUfB Drivers - Ring 2 - UAT - v3.0 | Driver updates | Device | Devices | *Not assigned* |  |
-| Win - OIB - WUfB Drivers - Ring 3 - Production - v3.0 | Driver updates | Device | Devices | Test, 1, 2, 3 |  |
 
 ### Windows Experience
 
