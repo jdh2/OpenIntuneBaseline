@@ -30,6 +30,20 @@
     "Windows365": "WINDOWS365\\IntuneManagement"
   },
 
+  "defaultOverlay": "Gnosis",
+  "overlays": {
+    "Gnosis": {
+      "description": "Gnosis customisations on top of OpenIntuneBaseline, from the Gnosis - Open Intune Baseline repo (see GNOSIS.md there).",
+      "platforms": {
+        "Windows": "GNOSIS\\Windows"
+      },
+      "exclude": [
+        "Win - OIB - WUfB - *",
+        "Win - OIB - WUfB Drivers - *"
+      ]
+    }
+  },
+
   "categories": [
     { "name": "Windows 365",         "match": [ "Win365 - OIB - *" ] },
     { "name": "Device Compliance",   "match": [ "Win - OIB - CP - *", "Win - OIB - Compliance - *" ] },
