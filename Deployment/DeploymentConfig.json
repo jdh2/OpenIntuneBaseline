@@ -37,7 +37,8 @@
       "platforms": {
         "Windows": "GNOSIS\\Windows"
       },
-      "exclude": [
+      "exclude": [],
+      "excludeUpdatePolicies": [
         "Win - OIB - WUfB - *",
         "Win - OIB - WUfB Drivers - *"
       ]
@@ -60,7 +61,9 @@
   "ringSpecificPolicies": [
     { "match": "* - Ring 1 - Pilot - *",      "rings": [ ] },
     { "match": "* - Ring 2 - UAT - *",        "rings": [ ] },
-    { "match": "* - Ring 3 - Production - *", "rings": [ "Test", "1", "2", "3" ] }
+    { "match": "* - Ring 3 - Production - *", "rings": [ "Test", "1", "2", "3" ] },
+    { "match": "* - ASR Rules (L2) - *",              "rings": [ ], "reason": "Sets the same rules as ASR Rules (Audit Mode). Assign it after auditing, in place of the audit policy." },
+    { "match": "* - Personal Data Encryption - *",    "rings": [ ], "reason": "Conflicts with Automatic Restart Sign-On and needs Windows Enterprise." }
   ],
 
   "filters": [
@@ -73,8 +76,8 @@
     {
       "key": "Virtual",
       "displayName": "OIB - Windows - Virtual Machines",
-      "description": "Windows 365, Azure Virtual Desktop and other virtual machines. Used to keep hardware-dependent policies off virtual devices.",
-      "rule": "(device.model -startsWith \"Cloud PC\") or (device.model -contains \"Virtual\") or (device.model -startsWith \"VMware\") or (device.operatingSystemSKU -eq \"ServerRdsh\")"
+      "description": "Windows 365 Cloud PCs and Azure Virtual Desktop session hosts (single and multi-session). Used to keep hardware-dependent policies off virtual devices.",
+      "rule": "(device.model -startsWith \"Cloud PC\") or (device.model -eq \"Virtual Machine\") or (device.operatingSystemSKU -eq \"ServerRdsh\")"
     }
   ],
 
@@ -145,8 +148,5 @@
     ]
   },
 
-  "skipByDefault": [
-    { "match": "* - ASR Rules (L2) - *",                 "reason": "Sets the same rules as ASR Rules (Audit Mode). Deploy it after auditing, in place of the audit policy." },
-    { "match": "* - Personal Data Encryption - *",       "reason": "Conflicts with Automatic Restart Sign-On and needs Windows Enterprise." }
-  ]
+  "skipByDefault": [ ]
 }

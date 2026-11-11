@@ -14,9 +14,17 @@ By default the script deploys the baseline with the **Gnosis** customisations ap
 | --- | --- | --- |
 | Replaced | `Win - OIB - ES - Windows LAPS - D - LAPS Configuration - v4.0` | The managed local admin account is named `Gnosis` instead of the default `WLapsAdmin` |
 | Replaced | `Win - OIB - ES - Local Group Membership - D - Local Administrators - v3.7` | Restricts the Administrators group to the `Gnosis` account, to match LAPS. Upstream's version names `WLapsAdmin`, which would remove the Gnosis LAPS account from Administrators |
-| Left out | The three `Win - OIB - WUfB - Ring …` update rings and three `Win - OIB - WUfB Drivers - Ring …` driver profiles | Windows updates are managed by ConnectWise RMM, not Intune |
+| Left out | The three `Win - OIB - WUfB - Ring …` update rings and three `Win - OIB - WUfB Drivers - Ring …` driver profiles | Windows updates are managed by ConnectWise RMM, not Intune. Deploy them with `-IncludeUpdatePolicies` |
 
-A default run therefore deploys 72 policies instead of 78. Deploy the upstream baseline unchanged with `-Overlay None`:
+A default run therefore deploys 74 policies instead of 80. For a tenant where ConnectWise RMM doesn't manage updates, keep the Gnosis customisations and add the update rings and driver profiles with `-IncludeUpdatePolicies`:
+
+```powershell
+.\Deploy-OpenIntuneBaseline.ps1 -TenantId contoso.onmicrosoft.com -IncludeUpdatePolicies
+```
+
+Driver profiles need Intune's Windows data licence confirmation first (**Tenant administration > Connectors and tokens > Windows data**). Without it, creating them fails with 403 Forbidden and the rest of the deployment carries on.
+
+Deploy the upstream baseline unchanged, update policies included, with `-Overlay None`:
 
 ```powershell
 .\Deploy-OpenIntuneBaseline.ps1 -TenantId contoso.onmicrosoft.com -Overlay None
@@ -25,7 +33,7 @@ A default run therefore deploys 72 policies instead of 78. Deploy the upstream b
 How the overlay works:
 
 - **Replacing a policy:** a file in `GNOSIS\Windows` replaces the upstream policy with the same `OIBID:` tag in its description, or failing that, the same name. It keeps the upstream policy's name, so the result looks like any other OIB policy in Intune.
-- **Leaving policies out:** upstream policies whose names match a pattern in `overlays.Gnosis.exclude` aren't loaded at all, even with `-PolicyName`.
+- **Leaving policies out:** upstream policies whose names match a pattern in `overlays.Gnosis.exclude` aren't loaded at all, even with `-PolicyName`. Patterns in `overlays.Gnosis.excludeUpdatePolicies` are left out the same way unless you pass `-IncludeUpdatePolicies`.
 - **Keeping in step with upstream:** if upstream releases a new version of a replaced policy (a new name or version number), or removes it, the script stops and names the overlay file to update, so an old Gnosis copy is never deployed in place of a newer upstream policy. To update it, copy upstream's new file into `GNOSIS\Windows` and re-apply the one-line change.
 - **Existing policies:** like everything else, a policy that already exists in the tenant under the same name is reused, not changed. A tenant that already has upstream's LAPS or Local Administrators policy under those names keeps them as they are.
 - **Encoding:** keep the overlay files in a path without `IntuneManagement` in it. The repo's `.gitattributes` treats every `IntuneManagement` folder (other than `WINDOWS` and `BYOD`) as UTF-16, which would garble UTF-8 exports.
@@ -64,8 +72,8 @@ Points to be aware of:
 | Object | Count | Notes |
 | --- | --- | --- |
 | Assignment filters | 2 | `OIB - Windows - Windows 365 Cloud PCs` and `OIB - Windows - Virtual Machines` |
-| Security groups | 64 by default: 4 per category and audience | `<Category> - Update Ring - <Test, 1, 2 or 3> - <Users or Devices>`. Only the audiences a category's policies target get groups (see [Ring membership](#ring-membership)) |
-| Policies | 72 by default (78 with `-Overlay None`) | Settings catalog, endpoint security, compliance, health monitoring, plus update rings and driver updates with `-Overlay None` (see [Gnosis overlay](#gnosis-overlay)) |
+| Security groups | 68 by default: 4 per category and audience | `<Category> - Update Ring - <Test, 1, 2 or 3> - <Users or Devices>`. Only the audiences a category's policies target get groups (see [Ring membership](#ring-membership)) |
+| Policies | 74 by default (80 with `-IncludeUpdatePolicies` or `-Overlay None`), including 2 created but not assigned (see [Created but not assigned](#created-but-not-assigned)) | Settings catalog, endpoint security, compliance, health monitoring, plus update rings and driver updates with `-IncludeUpdatePolicies` or `-Overlay None` (see [Gnosis overlay](#gnosis-overlay)) |
 | Assignments | 1 per policy per ring | Only for the rings named with `-Ring` |
 
 ### Categories
@@ -164,18 +172,24 @@ So every ring gets the same Production update settings, and the update ring grou
 | BitLocker (OS Disk) | Exclude *Virtual Machines* | BitLocker isn't supported on Cloud PCs or AVD |
 | Compliance: Device Health - BitLocker, Code Integrity, SecureBoot | Exclude *Virtual Machines* | Cloud PCs use the Windows 365 Device Health compliance policy instead, as the [Windows 365 README](../WINDOWS365/README.md) recommends |
 
-The *Virtual Machines* filter matches a model starting with `Cloud PC` or `VMware`, a model containing `Virtual` (Hyper-V, Azure/AVD, Parallels, VirtualBox), or the Windows Enterprise multi-session SKU. Check the models in your tenant (**Devices > Windows**, *Model* column) and adjust the rule in the configuration if you use another hypervisor. If a filter already exists with the same name, the script keeps its rule and tells you when it differs.
+The *Virtual Machines* filter covers Windows 365 and Azure Virtual Desktop only: a model starting with `Cloud PC` (Windows 365), the model `Virtual Machine` (Azure VMs, so single-session AVD session hosts), or the Windows Enterprise multi-session SKU (multi-session AVD). Hyper-V VMs also report `Virtual Machine`, so they match too. Other hypervisors, such as VMware, Parallels or VirtualBox, aren't covered and are treated as physical devices; check the models in your tenant (**Devices > Windows**, *Model* column) and add them to the rule in the configuration if you need them. If a filter already exists with the same name, the script keeps its rule and tells you when it differs.
 
-With `-Overlay None`, note that driver update profiles don't support assignment filters, so the driver rings also reach any Cloud PCs or VMs in the `Windows Security` ring groups. If you don't want that, keep virtual devices (or their users) out of those groups.
+With `-IncludeUpdatePolicies` or `-Overlay None`, note that driver update profiles don't support assignment filters, so the driver rings also reach any Cloud PCs or VMs in the `Windows Security` ring groups. If you don't want that, keep virtual devices (or their users) out of those groups.
 
-### Skipped by default
+### Created but not assigned
+
+These policies are created in every run but left unassigned, through `ringSpecificPolicies` entries with no rings, so they are ready in Intune to assign by hand when you need them:
 
 | Policy | Reason |
 | --- | --- |
-| ASR Rules (L2) | Sets the same 19 rules as ASR Rules (Audit Mode). Deploy audit mode first, review the results in Defender, then replace it with L2 |
+| ASR Rules (L2) | Sets the same 19 rules as ASR Rules (Audit Mode). Run audit mode first, review the results in Defender, then assign L2 in its place |
 | Personal Data Encryption | Conflicts with Automatic Restart Sign-On (per the baseline manifest) and needs Windows Enterprise |
 
-Include either one with `-PolicyName`. The script refuses to deploy both halves of a conflicting pair in one run. It can't see what's already in your tenant, though, so remove the other policy's assignment yourself before you assign the replacement.
+Before assigning one of them to a ring, remove the conflicting policy's assignment from that ring (ASR Rules (Audit Mode) for L2, the Automatic Restart Sign-On policy for Personal Data Encryption). To have the script assign it instead, give its `ringSpecificPolicies` entry the rings to use, and add an entry with no rings for the policy it replaces.
+
+The script stops if two conflicting policies (from `conflicts` in the configuration or the baseline manifest) would be assigned to the same ring. Creating both, with one left unassigned, is fine. It can't see assignments already in your tenant, though, so check those yourself.
+
+`skipByDefault` in the configuration still works for leaving a policy out entirely unless it's named with `-PolicyName`; it's currently empty.
 
 ## Prerequisites
 
@@ -217,9 +231,10 @@ You can widen one category at a time:
 | Parameter | Use |
 | --- | --- |
 | `-Platform Windows` | Deploy only one baseline (`Windows` or `Windows365`) |
-| `-PolicyName '*BitLocker*'` | Deploy only matching policies (wildcards). Also includes policies skipped by default |
+| `-PolicyName '*BitLocker*'` | Deploy only matching policies (wildcards). Also includes policies skipped by default (`skipByDefault`) |
 | `-Environment Hybrid` | Remove the settings that break on-premises AD (see above). Default is `CloudNative` |
 | `-Overlay None` | Deploy the upstream baseline without the Gnosis customisations (see [Gnosis overlay](#gnosis-overlay)). Default is `Gnosis` |
+| `-IncludeUpdatePolicies` | Also deploy the Windows Update rings and driver profiles that the Gnosis overlay leaves out, for tenants where ConnectWise RMM doesn't manage updates |
 | `-SkipAssignments` | Create everything but assign nothing |
 | `-TestRingOnly` | For small tenants: create only the Test groups and assign every policy to them (see [Small tenants](#small-tenants)) |
 | `-DynamicDeviceRings` | Create the ring 1 to 3 Devices groups as dynamic groups (see [Ring membership](#ring-membership)) |

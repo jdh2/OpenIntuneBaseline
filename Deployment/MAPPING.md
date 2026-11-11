@@ -6,7 +6,7 @@ Generated from [`DeploymentConfig.json`](DeploymentConfig.json) and the Windows 
 .\Deploy-OpenIntuneBaseline.ps1 -ExportMapping .\Deployment\MAPPING.md
 ```
 
-A default run deploys **72 policies** into **10 categories**, creating **64 groups** and **2 filters**. Policies are only assigned to the rings named with `-Ring` in each run, so this is the full plan once every ring is rolled out.
+A default run deploys **74 policies** into **10 categories**, creating **68 groups** and **2 filters**. Policies are only assigned to the rings named with `-Ring` in each run, so this is the full plan once every ring is rolled out.
 
 ## Groups
 
@@ -23,7 +23,8 @@ Each category gets a set of ring groups for each audience its policies target. G
 | [Microsoft Edge](#microsoft-edge) | Devices | 2 | `Microsoft Edge - Update Ring - Test - Devices` | `Microsoft Edge - Update Ring - 1 - Devices` | `Microsoft Edge - Update Ring - 2 - Devices` | `Microsoft Edge - Update Ring - 3 - Devices` |
 | [Microsoft OneDrive](#microsoft-onedrive) | Users | 1 | `Microsoft OneDrive - Update Ring - Test - Users` | `Microsoft OneDrive - Update Ring - 1 - Users` | `Microsoft OneDrive - Update Ring - 2 - Users` | `Microsoft OneDrive - Update Ring - 3 - Users` |
 | [Microsoft OneDrive](#microsoft-onedrive) | Devices | 1 | `Microsoft OneDrive - Update Ring - Test - Devices` | `Microsoft OneDrive - Update Ring - 1 - Devices` | `Microsoft OneDrive - Update Ring - 2 - Devices` | `Microsoft OneDrive - Update Ring - 3 - Devices` |
-| [Microsoft Defender](#microsoft-defender) | Devices | 7 | `Microsoft Defender - Update Ring - Test - Devices` | `Microsoft Defender - Update Ring - 1 - Devices` | `Microsoft Defender - Update Ring - 2 - Devices` | `Microsoft Defender - Update Ring - 3 - Devices` |
+| [Microsoft Defender](#microsoft-defender) | Devices | 8 | `Microsoft Defender - Update Ring - Test - Devices` | `Microsoft Defender - Update Ring - 1 - Devices` | `Microsoft Defender - Update Ring - 2 - Devices` | `Microsoft Defender - Update Ring - 3 - Devices` |
+| [Encryption](#encryption) | Users | 1 | `Encryption - Update Ring - Test - Users` | `Encryption - Update Ring - 1 - Users` | `Encryption - Update Ring - 2 - Users` | `Encryption - Update Ring - 3 - Users` |
 | [Encryption](#encryption) | Devices | 1 | `Encryption - Update Ring - Test - Devices` | `Encryption - Update Ring - 1 - Devices` | `Encryption - Update Ring - 2 - Devices` | `Encryption - Update Ring - 3 - Devices` |
 | [Identity and Access](#identity-and-access) | Devices | 6 | `Identity and Access - Update Ring - Test - Devices` | `Identity and Access - Update Ring - 1 - Devices` | `Identity and Access - Update Ring - 2 - Devices` | `Identity and Access - Update Ring - 3 - Devices` |
 | [Windows Security](#windows-security) | Users | 4 | `Windows Security - Update Ring - Test - Users` | `Windows Security - Update Ring - 1 - Users` | `Windows Security - Update Ring - 2 - Users` | `Windows Security - Update Ring - 3 - Users` |
@@ -58,19 +59,19 @@ These are the differences from the upstream baseline, defined under `overlays.Gn
 | --- | --- | --- |
 | Replaced with the Gnosis version | Win - OIB - ES - Local Group Membership - D - Local Administrators - v3.7 | `GNOSIS/Windows/SettingsCatalog/Win - OIB - ES - Local Group Membership - D - Local Administrators - v3.7.json` |
 | Replaced with the Gnosis version | Win - OIB - ES - Windows LAPS - D - LAPS Configuration - v4.0 | `GNOSIS/Windows/SettingsCatalog/Win - OIB - ES - Windows LAPS - D - LAPS Configuration - v4.0.json` |
-| Left out | Win - OIB - WUfB - Ring 1 - Pilot - v3.0 | `exclude` in the configuration |
-| Left out | Win - OIB - WUfB - Ring 2 - UAT - v3.0 | `exclude` in the configuration |
-| Left out | Win - OIB - WUfB - Ring 3 - Production - v3.0 | `exclude` in the configuration |
-| Left out | Win - OIB - WUfB Drivers - Ring 1 - Pilot - v3.0 | `exclude` in the configuration |
-| Left out | Win - OIB - WUfB Drivers - Ring 2 - UAT - v3.0 | `exclude` in the configuration |
-| Left out | Win - OIB - WUfB Drivers - Ring 3 - Production - v3.0 | `exclude` in the configuration |
+| Left out | Win - OIB - WUfB - Ring 1 - Pilot - v3.0 | `excludeUpdatePolicies` in the configuration; deploy with `-IncludeUpdatePolicies` |
+| Left out | Win - OIB - WUfB - Ring 2 - UAT - v3.0 | `excludeUpdatePolicies` in the configuration; deploy with `-IncludeUpdatePolicies` |
+| Left out | Win - OIB - WUfB - Ring 3 - Production - v3.0 | `excludeUpdatePolicies` in the configuration; deploy with `-IncludeUpdatePolicies` |
+| Left out | Win - OIB - WUfB Drivers - Ring 1 - Pilot - v3.0 | `excludeUpdatePolicies` in the configuration; deploy with `-IncludeUpdatePolicies` |
+| Left out | Win - OIB - WUfB Drivers - Ring 2 - UAT - v3.0 | `excludeUpdatePolicies` in the configuration; deploy with `-IncludeUpdatePolicies` |
+| Left out | Win - OIB - WUfB Drivers - Ring 3 - Production - v3.0 | `excludeUpdatePolicies` in the configuration; deploy with `-IncludeUpdatePolicies` |
 
 ## Filters
 
 | Filter | Rule | Applied to |
 | --- | --- | --- |
 | `OIB - Windows - Windows 365 Cloud PCs` | `(device.model -startsWith "Cloud PC")` | include: Win365 - OIB - Compliance - U - Device Health - v1.0<br>include: Win365 - OIB - Device Security - D - Connectivity Settings - v1.0<br>include: Win365 - OIB - Device Security - D - Resource Redirection - v1.0 |
-| `OIB - Windows - Virtual Machines` | `(device.model -startsWith "Cloud PC") or (device.model -contains "Virtual") or (device.model -startsWith "VMware") or (device.operatingSystemSKU -eq "ServerRdsh")` | exclude: Win - OIB - CP - Device Health - U - BitLocker - v4.0<br>exclude: Win - OIB - CP - Device Health - U - Code Integrity - v4.0<br>exclude: Win - OIB - CP - Device Health - U - SecureBoot - v4.0<br>exclude: Win - OIB - ES - Encryption - D - BitLocker (OS Disk) - v3.7 |
+| `OIB - Windows - Virtual Machines` | `(device.model -startsWith "Cloud PC") or (device.model -eq "Virtual Machine") or (device.operatingSystemSKU -eq "ServerRdsh")` | exclude: Win - OIB - CP - Device Health - U - BitLocker - v4.0<br>exclude: Win - OIB - CP - Device Health - U - Code Integrity - v4.0<br>exclude: Win - OIB - CP - Device Health - U - SecureBoot - v4.0<br>exclude: Win - OIB - ES - Encryption - D - BitLocker (OS Disk) - v3.7 |
 
 ## Policies by category
 
@@ -151,7 +152,7 @@ Devices groups: `Microsoft Defender - Update Ring - Test - Devices`, `Microsoft 
 | Policy | Type | Scope | Assigned to | Rings | Filter |
 | --- | --- | --- | --- | --- | --- |
 | Win - OIB - ES - Attack Surface Reduction - D - ASR Rules (Audit Mode) - v3.1 | Endpoint security | Device | Devices | Test, 1, 2, 3 |  |
-| ~~Win - OIB - ES - Attack Surface Reduction - D - ASR Rules (L2) - v3.7~~ *(skipped by default)* | Endpoint security | Device | Devices | Test, 1, 2, 3 |  |
+| Win - OIB - ES - Attack Surface Reduction - D - ASR Rules (L2) - v3.7 | Endpoint security | Device | Devices | *Not assigned* |  |
 | Win - OIB - ES - Defender Antivirus - D - AV Configuration - v4.0 | Endpoint security | Device | Devices | Test, 1, 2, 3 |  |
 | Win - OIB - ES - Defender Antivirus - D - Security Experience - v4.0 | Endpoint security | Device | Devices | Test, 1, 2, 3 |  |
 | Win - OIB - ES - Defender Antivirus Updates - Ring 1 - Pilot - v3.4 | Endpoint security | Device | Devices | *Not assigned* |  |
@@ -161,12 +162,14 @@ Devices groups: `Microsoft Defender - Update Ring - Test - Devices`, `Microsoft 
 
 ### Encryption
 
+Users groups: `Encryption - Update Ring - Test - Users`, `Encryption - Update Ring - 1 - Users`, `Encryption - Update Ring - 2 - Users`, `Encryption - Update Ring - 3 - Users`
+
 Devices groups: `Encryption - Update Ring - Test - Devices`, `Encryption - Update Ring - 1 - Devices`, `Encryption - Update Ring - 2 - Devices`, `Encryption - Update Ring - 3 - Devices`
 
 | Policy | Type | Scope | Assigned to | Rings | Filter |
 | --- | --- | --- | --- | --- | --- |
 | Win - OIB - ES - Encryption - D - BitLocker (OS Disk) - v3.7 | Endpoint security | Device | Devices | Test, 1, 2, 3 | exclude `OIB - Windows - Virtual Machines` |
-| ~~Win - OIB - ES - Encryption - U - Personal Data Encryption - v3.4~~ *(skipped by default)* | Endpoint security | User | Users | Test, 1, 2, 3 |  |
+| Win - OIB - ES - Encryption - U - Personal Data Encryption - v3.4 | Endpoint security | User | Users | *Not assigned* |  |
 
 ### Identity and Access
 
@@ -232,11 +235,11 @@ Devices groups: `Windows Experience - Update Ring - Test - Devices`, `Windows Ex
 | Win - OIB - SC - Windows User Experience - U - Copilot - v3.8 | Settings catalog | User | Users | Test, 1, 2, 3 |  |
 | Win - OIB - TP - Health Monitoring - D - Endpoint Analytics - v3.4 | Device configuration | Device | Devices | Test, 1, 2, 3 |  |
 
-## Skipped by default
+## Created but not assigned
 
-These are created and assigned only when named with `-PolicyName`.
+These are created in every run but left unassigned by `ringSpecificPolicies`, so you can assign them by hand when ready.
 
 | Policy | Reason |
 | --- | --- |
-| Win - OIB - ES - Attack Surface Reduction - D - ASR Rules (L2) - v3.7 | Sets the same rules as ASR Rules (Audit Mode). Deploy it after auditing, in place of the audit policy. |
+| Win - OIB - ES - Attack Surface Reduction - D - ASR Rules (L2) - v3.7 | Sets the same rules as ASR Rules (Audit Mode). Assign it after auditing, in place of the audit policy. |
 | Win - OIB - ES - Encryption - U - Personal Data Encryption - v3.4 | Conflicts with Automatic Restart Sign-On and needs Windows Enterprise. |

@@ -88,6 +88,12 @@
     deploy the upstream baseline unchanged. The upstream folders are never modified, so they
     can still be updated from upstream.
 
+.PARAMETER IncludeUpdatePolicies
+    Deploys the Windows Update rings and driver profiles that the overlay leaves out
+    (excludeUpdatePolicies in the configuration). The Gnosis overlay leaves them out because
+    ConnectWise RMM normally manages updates; use this for tenants where it doesn't. The
+    upstream baseline (-Overlay None) always includes them.
+
 .PARAMETER ExportMapping
     Writes a Markdown document to this path showing every group that would be created and
     which policies are assigned to which ring groups and filters, then stops. Does not
@@ -121,6 +127,12 @@
     Widens the Microsoft Office policies to ring 1.
 
 .EXAMPLE
+    .\Deploy-OpenIntuneBaseline.ps1 -TenantId contoso.onmicrosoft.com -IncludeUpdatePolicies
+
+    For a tenant where ConnectWise RMM doesn't manage updates: also deploys the Windows
+    Update rings and driver profiles.
+
+.EXAMPLE
     .\Deploy-OpenIntuneBaseline.ps1 -TenantId contoso.onmicrosoft.com -TestRingOnly
 
     For a small tenant: creates only the Test groups and assigns every policy to them.
@@ -147,10 +159,9 @@
     Regenerates the group and assignment mapping document without connecting to Graph.
 
 .EXAMPLE
-    .\Deploy-OpenIntuneBaseline.ps1 -PolicyName '*ASR Rules (L2)*' -Ring Test
+    .\Deploy-OpenIntuneBaseline.ps1 -PolicyName '*BitLocker*' -Ring Test
 
-    Deploys the ASR L2 policy, which is skipped by default. Remove the audit mode
-    policy's assignment for the same ring first, because the two conflict.
+    Deploys only the BitLocker policies and assigns them to the Test ring.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -181,6 +192,8 @@ param(
 
     [ValidateNotNullOrEmpty()]
     [string]$Overlay,
+
+    [switch]$IncludeUpdatePolicies,
 
     [ValidateNotNullOrEmpty()]
     [string]$ExportMapping,
@@ -533,6 +546,7 @@ $overlayName = if ($PSBoundParameters.ContainsKey('Overlay')) { $Overlay } else 
 if ($overlayName -eq 'None') { $overlayName = '' }
 $overlayFiles = @{}
 $overlayExclude = @()
+$updateExclude = @()
 $overlayExcluded = [System.Collections.Generic.List[string]]::new()
 if ($overlayName) {
     $overlayProperty = $config.overlays.PSObject.Properties[$overlayName]
@@ -541,6 +555,11 @@ if ($overlayName) {
         throw "Overlay '$overlayName' is not defined under overlays in the configuration (defined: $($defined -join ', ')). Use -Overlay None to deploy the upstream baseline only."
     }
     $overlayExclude = Get-StringList $overlayProperty.Value.exclude
+    # Windows Update rings and driver profiles the overlay leaves out because something else
+    # (such as an RMM tool) manages updates; -IncludeUpdatePolicies deploys them anyway.
+    $updateExclude = Get-StringList $overlayProperty.Value.excludeUpdatePolicies
+    if (-not $IncludeUpdatePolicies) { $overlayExclude = @($overlayExclude) + @($updateExclude) }
+    elseif (-not $updateExclude) { Write-Warning "-IncludeUpdatePolicies has no effect: the $overlayName overlay doesn't leave out any update policies." }
     foreach ($entry in @($overlayProperty.Value.platforms.PSObject.Properties)) {
         if ($entry.Name -notin @($config.platforms.PSObject.Properties | ForEach-Object { $_.Name })) {
             throw "Overlay '$overlayName' has files for platform '$($entry.Name)', which is not a configured platform."
@@ -647,6 +666,7 @@ foreach ($platformName in $Platform) {
                 Rings      = if ($ringRule) { @((Get-StringList $ringRule[0].rings) | Where-Object { $_ -in $configRings }) } else { $configRings }
                 Filter     = if ($filterRule) { $filterRule[0] } else { $null }
                 SkipReason = if ($skipRule) { $skipRule[0].reason } else { $null }
+                UnassignedReason = if ($ringRule) { $ringRule[0].reason } else { $null }
             })
     }
 }
@@ -749,7 +769,8 @@ if ($ExportMapping) {
             $lines.Add("| Replaced with the $overlayName version | $(Format-Cell $policy.Name) | ``$(Format-Cell $relative)`` |")
         }
         foreach ($excludedName in @($overlayExcluded | Sort-Object)) {
-            $lines.Add("| Left out | $(Format-Cell $excludedName) | ``exclude`` in the configuration |")
+            $reason = if ($updateExclude -and (Test-NameMatch $excludedName $updateExclude)) { '`excludeUpdatePolicies` in the configuration; deploy with `-IncludeUpdatePolicies`' } else { '`exclude` in the configuration' }
+            $lines.Add("| Left out | $(Format-Cell $excludedName) | $reason |")
         }
         $lines.Add('')
     }
@@ -803,6 +824,18 @@ if ($ExportMapping) {
             $filterText = if ($policy.Filter) { "$($policy.Filter.mode) ``$($filtersByKey[$policy.Filter.filter].displayName)``" } else { '' }
             $lines.Add("| $name | $(Get-PolicyTypeLabel $policy) | $(Get-PolicyScope $policy.Name) | $($policy.Audience) | $rings | $filterText |")
         }
+        $lines.Add('')
+    }
+
+    $heldBack = @($deployed | Where-Object { $_.UnassignedReason -and -not @($_.Rings).Count } | Sort-Object Name)
+    if ($heldBack) {
+        $lines.Add('## Created but not assigned')
+        $lines.Add('')
+        $lines.Add('These are created in every run but left unassigned by `ringSpecificPolicies`, so you can assign them by hand when ready.')
+        $lines.Add('')
+        $lines.Add('| Policy | Reason |')
+        $lines.Add('| --- | --- |')
+        foreach ($policy in $heldBack) { $lines.Add("| $(Format-Cell $policy.Name) | $(Format-Cell $policy.UnassignedReason) |") }
         $lines.Add('')
     }
 
@@ -875,17 +908,21 @@ foreach ($platformName in $Platform) {
         }
     }
 }
-# Conflict pairs use the baseline's own names, without the hybrid suffix.
-$selectedNames = @($policies | ForEach-Object { $_.OriginalName })
+# Conflict pairs use the baseline's own names, without the hybrid suffix. Two conflicting
+# policies can both be created; they only clash when assigned to the same ring group, so a
+# policy left unassigned by ringSpecificPolicies (or with -SkipAssignments) never conflicts.
+$assignedPolicies = @(if (-not $SkipAssignments) { $policies | Where-Object { @($_.Rings).Count } })
 $reported = @{}
 foreach ($pair in $conflictPairs) {
-    $first = @($selectedNames | Where-Object { $_ -like $pair[0] })
-    $second = @($selectedNames | Where-Object { $_ -like $pair[1] })
-    if ($first -and $second) {
-        $key = (@($first[0], $second[0]) | Sort-Object) -join '|'
-        if ($reported.ContainsKey($key)) { continue }
-        $reported[$key] = $true
-        $problems.Add("'$($first[0])' conflicts with '$($second[0])'. Deploy only one of them; use -PolicyName to choose.")
+    foreach ($first in @($assignedPolicies | Where-Object { $_.OriginalName -like $pair[0] })) {
+        foreach ($second in @($assignedPolicies | Where-Object { $_.OriginalName -like $pair[1] })) {
+            $sharedRings = @($first.Rings | Where-Object { $_ -in $second.Rings })
+            if (-not $sharedRings) { continue }
+            $key = (@($first.OriginalName, $second.OriginalName) | Sort-Object) -join '|'
+            if ($reported.ContainsKey($key)) { continue }
+            $reported[$key] = $true
+            $problems.Add("'$($first.OriginalName)' conflicts with '$($second.OriginalName)' and both would be assigned to ring $($sharedRings -join ', '). Leave one of them unassigned with ringSpecificPolicies, or use -PolicyName to deploy only one.")
+        }
     }
 }
 
@@ -902,6 +939,10 @@ Write-Host "Environment: $Environment"
 if ($overlayName) {
     $replacedCount = @($allPolicies | Where-Object Overlay).Count
     Write-Host "Overlay: $overlayName - $replacedCount policies replaced with $overlayName versions, $($overlayExcluded.Count) left out. Use -Overlay None for the upstream baseline only."
+    if ($updateExclude) {
+        if ($IncludeUpdatePolicies) { Write-Host 'Update policies: included (-IncludeUpdatePolicies)' }
+        else { Write-Host 'Update policies: left out (Windows Update rings and drivers). Use -IncludeUpdatePolicies if the RMM tool does not manage updates.' }
+    }
 }
 else { Write-Host 'Overlay: none (upstream baseline only)' }
 if ($Environment -eq 'Hybrid') {
@@ -1165,7 +1206,8 @@ foreach ($policy in ($policies | Sort-Object Category, Name)) {
     if ($SkipAssignments) { continue }
 
     if (-not @($policy.Rings).Count) {
-        Add-Result 'Assignment' $name 'Unassigned' $policyId 'Left unassigned by ringSpecificPolicies.'
+        $unassignedDetail = if ($policy.UnassignedReason) { "Left unassigned by ringSpecificPolicies: $($policy.UnassignedReason)" } else { 'Left unassigned by ringSpecificPolicies.' }
+        Add-Result 'Assignment' $name 'Unassigned' $policyId $unassignedDetail
         continue
     }
     $assignRings = @($policy.Rings | Where-Object { $_ -in $Ring })
