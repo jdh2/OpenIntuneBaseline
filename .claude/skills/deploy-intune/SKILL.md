@@ -30,9 +30,11 @@ Stop with a clear message if any of these fail:
 Don't rely on lists written here. Read them fresh each time:
 
 - The `param()` block and comment-based help at the top of `Deploy-OpenIntuneBaseline.ps1`.
-  If it has parameters not covered below, ask about them too.
-- `Deployment/DeploymentConfig.json`: `rings` (ring names), `categories` (category names),
-  `overlays` and `defaultOverlay`.
+  If it has parameters not covered below, ask about them too, unless this skill says never to
+  use them.
+- `Deployment/DeploymentConfig.json`: `rings` (ring names), `categories` (names and the
+  policy names each matches), `audiences` (which rings have dynamic rules), `overlays` and
+  `defaultOverlay`.
 
 ## 3. Ask the questions
 
@@ -45,33 +47,61 @@ options first. The person can always type their own answer. Ask in these rounds:
   answer. Remember exactly what they typed: they will have to type it again before deploying.
 - **Mode**: Deploy (a preview always runs first) / Export mapping only (`-ExportMapping`, no
   sign-in, changes nothing).
-- **Platform**: Windows and Windows 365 (default) / Windows only / Windows 365 only.
+- **Platform**: Windows and Windows 365 (default) / Windows only (`-Platform Windows`). There
+  is no Windows 365-only option.
 - **Environment**: Cloud native (default) / Hybrid or on-prem AD (`-Environment Hybrid`).
 
 **Round 2**
-- **Rings** (multiSelect): the rings from the config. Default is the first ring (Test).
-  Explain that rollout is gradual and rings are added on later runs. Skip this question if
-  they choose test ring only below.
 - **Ring setup**: Normal rings (default) / Test ring only, for small tenants (`-TestRingOnly`)
   / Create everything but assign nothing (`-SkipAssignments`).
+- **Dynamic groups** (multiSelect, skip with test ring only): none, all static (default) /
+  Dynamic device rings / Dynamic user rings. Mention that dynamic groups need Entra ID P1,
+  and that policies are never assigned to dynamic groups by this skill (see below).
 - **Overlay**: the default overlay from the config (say which) / each other overlay /
   None (upstream baseline only).
 - **Update policies**: Leave out as the overlay says (default) / Include
   (`-IncludeUpdatePolicies`, for tenants where ConnectWise RMM doesn't manage updates).
   Skip this when the overlay is None.
 
-**Round 3** (only ask what applies)
-- **Scope**: All policies (default) / Only some categories (they type names from the config)
-  / Only policies matching names (they type wildcard patterns for `-PolicyName`).
-- **Dynamic groups** (multiSelect, skip with test ring only): none (default, all static) /
-  Dynamic device rings / Dynamic user rings. Mention that dynamic groups need Entra ID P1.
-- **Existing groups**: Leave as they are (default) / Convert to match this run
-  (`-UpdateGroupRules`). Explain that a static group with members is never made dynamic.
+**Round 3**
+- **Rings** (multiSelect; skip with test ring only or assign nothing): the rings from the
+  config that can be assigned (see below). Default is the first ring (Test). Explain that
+  rollout is gradual and rings are added on later runs. If only one ring can be assigned,
+  offer it and "Don't assign anything" (`-SkipAssignments`).
+- **Which policies**: All policies (default) / Choose categories / Only policies matching
+  names (they type wildcard patterns for `-PolicyName`).
+
+**Round 4** (only if they chose categories)
+- List every category from the config's `categories` as options, so the person picks rather
+  than types. Leave out `Windows 365` (and any other category that only matches `Win365`
+  policies) when the platform is Windows only.
+- Split them into multiSelect questions of 2 to 4 categories each, in as few
+  AskUserQuestion calls as possible (up to 4 questions, so 16 categories, per call). Label
+  them "Categories (1 of 3)" and so on, and say they can pick none from a list.
+- They must pick at least one category in total. Pass the picks as `-Category`.
 
 For export mapping only, the tenant isn't needed; ask for an output path instead (default
 `.\MAPPING-<tenant or date>.md`), run it, report where the file is, and stop there.
 
-Validate typed category names against the config and ask again if one doesn't match.
+### Dynamic groups are never assigned
+
+Dynamic groups fill with users or devices automatically, so assigning a policy to one rolls
+it out straight away. The team decides when settings go out, so this skill never assigns
+policies to dynamic groups. Static groups are fine, because new ones are created empty.
+
+- A ring can't be assigned if any audience chosen as dynamic has a dynamic rule for that
+  ring in the config (`audiences[].dynamicRules`). With dynamic device or user rings, that
+  normally leaves only the Test ring. The script assigns a ring to both audiences at once,
+  so a ring is blocked even if only one of its audiences is dynamic.
+- Don't offer blocked rings, and refuse them if the person types them, explaining why. They
+  can assign those policies themselves in Intune when they are ready.
+
+### Existing groups are never changed
+
+Never pass `-UpdateGroupRules`, and don't offer to change existing groups. If a ring group
+already exists, the script reuses it as it is and reports any difference from the
+configuration (for example, a group that is dynamic but configured as static). Pass those
+reports on; don't offer to fix them.
 
 ## 4. Confirm the options
 
@@ -109,6 +139,11 @@ Run the confirmed command with `-WhatIf` added (and no `-Force`). It signs in wi
 permissions and changes nothing. From its output, note the `Target tenant:` ID and the
 `Account:` it signed in with, then summarise what *would* be created, reused, assigned and
 skipped, and any errors or warnings it reports.
+
+Check the preview's group results for every ring that would be assigned. If any of those
+groups already exists in the tenant as a dynamic group (the script reports it as "dynamic
+but configured as static"), deploying would assign policies to it. Stop, name the groups,
+and offer to start again without those rings. Deploy nothing.
 
 If the preview fails or shows problems, stop and help sort them out. Deploy nothing.
 
