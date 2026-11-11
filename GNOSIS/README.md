@@ -7,7 +7,7 @@ Gnosis's versions of OpenIntuneBaseline policies. [`Deploy-OpenIntuneBaseline.ps
 | `Windows/SettingsCatalog/Win - OIB - ES - Windows LAPS - D - LAPS Configuration - v4.0.json` | `automaticaccountmanagementnameorprefix`: `""` → `"Gnosis"` |
 | `Windows/SettingsCatalog/Win - OIB - ES - Local Group Membership - D - Local Administrators - v3.7.json` | Administrators group member: `"WLapsAdmin"` → `"Gnosis"` |
 
-The Windows Update rings and driver profiles are left out through `overlays.Gnosis.exclude` in [`Deployment/DeploymentConfig.json`](../Deployment/DeploymentConfig.json), because ConnectWise RMM manages Windows updates.
+The Windows Update rings and driver profiles are left out through `overlays.Gnosis.excludeUpdatePolicies` in [`Deployment/DeploymentConfig.json`](../Deployment/DeploymentConfig.json), because ConnectWise RMM manages Windows updates. For a tenant where it doesn't, deploy them with `-IncludeUpdatePolicies`.
 
 ## When upstream releases a new version
 
