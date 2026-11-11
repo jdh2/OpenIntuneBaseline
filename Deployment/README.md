@@ -200,12 +200,12 @@ The script stops if two conflicting policies (from `conflicts` in the configurat
 
 ## Guided deployment with Claude
 
-The repo includes a Claude skill, [`deploy-intune`](../.claude/skills/deploy-intune/SKILL.md), that asks for the script's options as multiple-choice questions, shows the exact command, and runs it once you confirm.
+The repo includes a Claude skill, [`deploy-intune`](../.claude/skills/deploy-intune/SKILL.md), that asks for the script's options as multiple-choice questions, always runs a read-only preview (`-WhatIf`) first, and deploys only after you type the tenant name again to confirm it.
 
 1. Clone this repo to your Windows machine.
 2. In the Claude desktop app's **Code** tab, start a local session in the repo folder. Cloud sessions can't open the sign-in window.
 3. Type `/deploy-intune`, or just ask to deploy the baseline, and answer the questions.
-4. Sign in with your own account when the Microsoft sign-in window opens.
+4. Sign in with your own account when the Microsoft sign-in window opens. You may be asked to sign in twice: once for the read-only preview, and again for the deployment, which needs write permissions.
 
 The skill pulls the latest version of the repo first and reads the script's parameters and `DeploymentConfig.json` on each run, so new options and categories are picked up without changing the skill.
 
