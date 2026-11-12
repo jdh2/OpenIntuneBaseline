@@ -42,11 +42,19 @@ Use AskUserQuestion: at most 4 questions per call, 2 to 4 options each, and reco
 options first. The person can always type their own answer. Ask in these rounds:
 
 **Round 1**
-- **Tenant** (free text): the tenant's `*.onmicrosoft.com` domain or tenant ID. Always
-  required. Offer one placeholder option such as "Type the tenant domain" and expect a typed
-  answer. Remember exactly what they typed: they will have to type it again before deploying.
-- **Mode**: Deploy (a preview always runs first) / Export mapping only (`-ExportMapping`, no
-  sign-in, changes nothing).
+- **Tenant**, which also sets the mode. The question box can only take typed text through
+  the app's own **Other** choice, which can't be renamed, so say so in the question:
+  "Which tenant should the baseline be deployed to? Choose **Other** and type its
+  `*.onmicrosoft.com` domain or tenant ID." Give exactly these two options, with no
+  placeholder option for the tenant:
+  - **Cancel**: stop; nothing is run.
+  - **Export mapping only**: no tenant needed; writes the mapping document without signing
+    in and changes nothing (`-ExportMapping`).
+
+  A typed tenant means Deploy (a preview always runs first). Remember exactly what they
+  typed: they will have to type it again before deploying. If Other is chosen with nothing
+  typed, treat it as Cancel. If the text isn't a domain or a tenant ID (a GUID), say so and
+  ask this question again.
 - **Platform**: Windows and Windows 365 (default) / Windows only (`-Platform Windows`). There
   is no Windows 365-only option.
 - **Environment**: Cloud native (default) / Hybrid or on-prem AD (`-Environment Hybrid`).
@@ -80,8 +88,10 @@ options first. The person can always type their own answer. Ask in these rounds:
   them "Categories (1 of 3)" and so on, and say they can pick none from a list.
 - They must pick at least one category in total. Pass the picks as `-Category`.
 
-For export mapping only, the tenant isn't needed; ask for an output path instead (default
-`.\MAPPING-<tenant or date>.md`), run it, report where the file is, and stop there.
+For export mapping only, still ask the platform, environment, ring setup, overlay and update
+policy questions (they change the mapping), skip the dynamic groups, rings and policies
+questions, and ask for an output path (default `.\MAPPING-<date>.md`). Run it, report where
+the file is, and stop there.
 
 ### Dynamic groups are never assigned
 
@@ -121,10 +131,12 @@ until they say yes.
   to a later command.
 - Run it in the background and check the output as it goes, because a full deployment can
   take longer than a single command's time limit.
-- Before each run, tell the person a Microsoft sign-in window is about to open and to sign in
-  with their own account for that tenant.
+- Before each run, tell the person a Microsoft sign-in window may open and, if it does, to
+  sign in with their own account for that tenant. If they already signed in recently, the
+  cached sign-in is used and no window appears; that's fine, because the `Target tenant:`
+  and `Account:` lines show who it signed in as.
 
-If the sign-in window doesn't appear or sign-in fails (for example, Conditional Access or a
+If the sign-in window should appear and doesn't, or sign-in fails (for example, Conditional Access or a
 window that can't open from this session), stop the run. Give the person the preview command
 and then the deployment command **without** `-Force`, to paste in that order into their own
 PowerShell 7 window from the repo folder. The script's own prompt then asks them to confirm
@@ -151,7 +163,13 @@ If the preview fails or shows problems, stop and help sort them out. Deploy noth
 
 Show the tenant ID and account from the preview and say plainly that the next step changes
 this tenant. Then ask the person, with AskUserQuestion, to **type the tenant name again**
-to deploy, with "Cancel" as the other option.
+to deploy: "To deploy, choose **Other** and type the tenant name again, exactly as you
+entered it at the start." Give exactly these two options, with no placeholder option for
+the tenant:
+- **Cancel**: deploy nothing.
+- **Change options**: deploy nothing and go back to the questions (step 3).
+
+If Other is chosen with nothing typed, treat it as Cancel.
 
 - Compare what they type with the tenant they entered in round 1, ignoring case and spaces
   at the ends. It must match exactly; a partial or similar name does not count.
@@ -168,8 +186,8 @@ Only after the tenant matches:
   the tenant. Never add `-Force` in any other case.
 - If the person wants to change any option at this point, go back to step 4: the changed
   command needs its own preview and tenant confirmation.
-- It signs in again (the person may see a second sign-in window), this time with write permissions. Check that its `Target tenant:` ID is
-  the same as the preview's. If it isn't, stop the run straight away and tell them.
+- It signs in again, this time with write permissions, so the person may see a second
+  sign-in window. Check that its `Target tenant:` ID is the same as the preview's. If it isn't, stop the run straight away and tell them.
 
 ## 8. Report
 
